@@ -65,6 +65,11 @@ fn makeLine(list: &mut Vec<Point>, point1: Point, point2: Point){
 }
 
 
+// todo
+// undo feature
+// different brush sizes
+// change brush colour
+// add inserting text
 fn main() {
     let sdl_context: Sdl = sdl3::init().unwrap();
     let video_subsystem:VideoSubsystem = sdl_context.video().unwrap();
