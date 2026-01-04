@@ -99,12 +99,15 @@ fn makeLine(list: &mut Vec<Point>, point1: Point, point2: Point){
 // different brush sizes
 // change brush colour
 // add inserting text
+
+// i need to optimise this
+// it uses more cpu the more things are drawn on
 fn main() {
     let sdl_context: Sdl = sdl3::init().unwrap();
     let video_subsystem:VideoSubsystem = sdl_context.video().unwrap();
 
-    const width: u32 = 1000;
-    const height: u32 = 700;
+    const width: u32 = 1800;
+    const height: u32 = 1000;
     const bgcolor: Color = Color::RGB(40, 40, 40);
     let window = video_subsystem.window("whiteboard", width, height)
         .set_window_flags(SDL_WINDOW_RESIZABLE as u32) // casting? still works?
@@ -123,12 +126,19 @@ fn main() {
     let mut isMovingCanvas = false;
     let mut event_pump = sdl_context.event_pump().unwrap();
     let /*mut*/ currentColor = Color::RGB(255, 255, 255);
-    // resizing the screen gets rid of everything
-    // this means i need to store all the data in an arraylist
+    // maybe i could optimise on space by not storing the colour of every single pixel
+    // i could do like struct thing{ color: Color, Vec<Pixels,}
+    // Vec<thing>
+    // that way if the user does a lot of drawing in a small amoutn of colors then it will store
+    // much less data
+    // however, if you use a lot of different colors, then a lot of different structs will be stored
+    // maybe i could switch between different storage modes based on the sizeof a vs sizeof b
     let mut whiteBoardData: Vec<Pixel> = Vec::new();
     let mut point1: Option<Point>;
     let mut point2: Option<Point> = None;
     'running: loop {
+        let mut needsDraw = false;
+        let mut needsClear = false;
         for event in event_pump.poll_iter() {
             match event {
                 Event::Quit {..} | Event::KeyDown { keycode: Some(Keycode::Escape), ..} => {
@@ -152,6 +162,8 @@ fn main() {
                     if (mouseHeldDown){ 
                         point1 = Some(Point::new(x as i32, y as i32));
                         if (isMovingCanvas) {
+                            needsDraw = true;
+                            needsClear = true;
                             // point 1 is the new point the mouse is at, point 2 is the old point
                             if (point2.is_some()){
                                 let dx = point1.unwrap().x - point2.unwrap().x;
@@ -173,6 +185,8 @@ fn main() {
                                     if (canvasBounds.isInside(pixel.point)) {
                                         whiteBoardData.push(pixel);
                                     }
+                                    canvas.set_draw_color(currentColor);
+                                    let result = canvas.draw_point(point);
                                 }
                             }
                         }
@@ -183,16 +197,20 @@ fn main() {
 
             }
         }
-        canvas.set_draw_color(bgcolor);
-        canvas.clear();
-        canvas.set_draw_color(Color::RGB(0, 0, 0));
-        let result = canvas.fill_rect(FRect::new(canvasBounds.x1 as f32, canvasBounds.y1 as f32, canvasBounds.width() as f32, canvasBounds.height() as f32));
-        for pixel in &whiteBoardData {
-            canvas.set_draw_color(pixel.color);
-            let result = canvas.draw_point(pixel.point);
+        if (needsClear){
+            canvas.set_draw_color(bgcolor);
+            canvas.clear();
+            canvas.set_draw_color(Color::RGB(0, 0, 0));
+            let result = canvas.fill_rect(FRect::new(canvasBounds.x1 as f32, canvasBounds.y1 as f32, canvasBounds.width() as f32, canvasBounds.height() as f32));
+        }
+        if (needsDraw){
+            for pixel in &whiteBoardData {
+                canvas.set_draw_color(pixel.color);
+                let result = canvas.draw_point(pixel.point);
+            }
         }
         // call at the end of every loop
         canvas.present();
-        sleep(Duration::new(0, 500_000_000u32 / 60));
+        sleep(Duration::new(0, 1_000_000_000u32 / 60));
     }
 }
