@@ -7,13 +7,42 @@ use sdl3::keyboard::Keycode;
 use sdl3::Sdl;
 use sdl3::VideoSubsystem;
 use sdl3::rect::Point;
-use sdl3::sys::video::SDL_SetWindowResizable;
+use sdl3::rect::Rect;
+use sdl3::render::FRect;
+use sdl3::sys::keycode::SDLK_SPACE;
 use sdl3::sys::video::SDL_WINDOW_RESIZABLE;
+use std::thread::sleep;
 use std::time::Duration;
 
 struct Pixel {
     point: Point,
     color: Color,
+}
+
+struct CanvasSize {
+    x1: i32,
+    y1: i32,
+    x2: i32,
+    y2: i32,
+}
+
+impl CanvasSize {
+    fn shift(&mut self, x: i32, y: i32){
+        self.x1 += x;
+        self.x2 += x;
+        self.y1 += y;
+        self.y2 += y;
+    }
+    fn isInside(&self, point: Point) -> bool {
+        return point.x >= self.x1 && point.y >= self.y1 && 
+            point.x < self.x2 && point.y < self.y2
+    }
+    fn width(&self) -> i32 {
+        return self.x2 - self.x1;
+    }
+    fn height(&self) -> i32 {
+        return self.y2 - self.y1;
+    }
 }
 
 // appends all the points between point1 and point2 to list
@@ -74,19 +103,24 @@ fn main() {
     let sdl_context: Sdl = sdl3::init().unwrap();
     let video_subsystem:VideoSubsystem = sdl_context.video().unwrap();
 
-    let window = video_subsystem.window("whiteboard", 1000, 700)
+    const width: u32 = 1000;
+    const height: u32 = 700;
+    const bgcolor: Color = Color::RGB(40, 40, 40);
+    let window = video_subsystem.window("whiteboard", width, height)
         .set_window_flags(SDL_WINDOW_RESIZABLE as u32) // casting? still works?
         .position_centered()
         .build()
         .unwrap();
 
     let mut canvas = window.into_canvas();
+    let mut canvasBounds: CanvasSize = CanvasSize { x1: (0), y1: (0), x2: (width as i32), y2: (height as i32) };
 
     canvas.set_draw_color(Color::RGB(0, 0, 0));
     canvas.clear();
     canvas.present();
 
     let mut mouseHeldDown = false;
+    let mut isMovingCanvas = false;
     let mut event_pump = sdl_context.event_pump().unwrap();
     let /*mut*/ currentColor = Color::RGB(255, 255, 255);
     // resizing the screen gets rid of everything
@@ -107,15 +141,39 @@ fn main() {
                     mouseHeldDown = false;
                     point2 = None;
                 },
+                Event::KeyDown {keycode: Some(Keycode::Space), ..} => {
+                    isMovingCanvas = true;
+                },
+                Event::KeyUp { keycode: Some(Keycode::Space), ..} => {
+                    isMovingCanvas = false;
+                },
                 Event::MouseMotion {x, y, ..} => {
-                    if (mouseHeldDown){
-                        let mut pointList: Vec<Point> = Vec::new();
+                    // this might be a little too much indentation lol
+                    if (mouseHeldDown){ 
                         point1 = Some(Point::new(x as i32, y as i32));
-                        if (point1.is_some() && point2.is_some()) {
-                            makeLine(&mut pointList, point1.unwrap(), point2.unwrap());
-                            for point in pointList.into_iter() {
-                                let pixel: Pixel = Pixel { point, color: (currentColor) };
-                                whiteBoardData.push(pixel);
+                        if (isMovingCanvas) {
+                            // point 1 is the new point the mouse is at, point 2 is the old point
+                            if (point2.is_some()){
+                                let dx = point1.unwrap().x - point2.unwrap().x;
+                                let dy = point1.unwrap().y - point2.unwrap().y;
+                                canvasBounds.shift(dx, dy);
+                                for pixel in &mut whiteBoardData {
+                                    pixel.point.x += dx;
+                                    pixel.point.y += dy;
+                                }
+                            }
+                        }
+                        else {
+                            let mut pointList: Vec<Point> = Vec::new();
+                            point1 = Some(Point::new(x as i32, y as i32));
+                            if (point1.is_some() && point2.is_some()) {
+                                makeLine(&mut pointList, point1.unwrap(), point2.unwrap());
+                                for point in pointList.into_iter() {
+                                    let pixel: Pixel = Pixel { point, color: (currentColor) };
+                                    if (canvasBounds.isInside(pixel.point)) {
+                                        whiteBoardData.push(pixel);
+                                    }
+                                }
                             }
                         }
                         point2 = point1;
@@ -125,11 +183,16 @@ fn main() {
 
             }
         }
+        canvas.set_draw_color(bgcolor);
+        canvas.clear();
+        canvas.set_draw_color(Color::RGB(0, 0, 0));
+        let result = canvas.fill_rect(FRect::new(canvasBounds.x1 as f32, canvasBounds.y1 as f32, canvasBounds.width() as f32, canvasBounds.height() as f32));
         for pixel in &whiteBoardData {
             canvas.set_draw_color(pixel.color);
             let result = canvas.draw_point(pixel.point);
         }
         // call at the end of every loop
         canvas.present();
+        sleep(Duration::new(0, 500_000_000u32 / 60));
     }
 }
