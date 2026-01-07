@@ -8,15 +8,17 @@ use sdl3::Sdl;
 use sdl3::VideoSubsystem;
 use sdl3::rect::Point;
 use sdl3::rect::Rect;
+use sdl3::render::FPoint;
 use sdl3::render::FRect;
 use sdl3::sys::keycode::SDLK_SPACE;
 use sdl3::sys::video::SDL_WINDOW_RESIZABLE;
 use std::thread::sleep;
 use std::time::Duration;
 
-struct Pixel {
-    point: Point,
+#[derive(Debug)]
+struct Pixels {
     color: Color,
+    points: Vec<FPoint>,
 }
 
 struct CanvasSize {
@@ -133,7 +135,9 @@ fn main() {
     // much less data
     // however, if you use a lot of different colors, then a lot of different structs will be stored
     // maybe i could switch between different storage modes based on the sizeof a vs sizeof b
-    let mut whiteBoardData: Vec<Pixel> = Vec::new();
+    // idk if using two different data structures and switching between them is a good idea
+    // has one struct Pixels per colour in the canvas
+    let mut PixelsVec: Vec<Pixels> = Vec::new();
     let mut point1: Option<Point>;
     let mut point2: Option<Point> = None;
     'running: loop {
@@ -157,44 +161,54 @@ fn main() {
                 Event::KeyUp { keycode: Some(Keycode::Space), ..} => {
                     isMovingCanvas = false;
                 },
-                Event::MouseMotion {x, y, ..} => {
+                Event::KeyDown {keycode: Some(Keycode::P), ..} => {
+                    println!("length of pixels is {}", PixelsVec.len());
+                    println!("contents of pixels is {:?}", PixelsVec);
+                }
+                Event::MouseMotion {x, y, ..} => 'mouse: {
                     // this might be a little too much indentation lol
-                    if (mouseHeldDown){ 
-                        point1 = Some(Point::new(x as i32, y as i32));
-                        if (isMovingCanvas) {
-                            needsDraw = true;
-                            needsClear = true;
-                            // point 1 is the new point the mouse is at, point 2 is the old point
-                            if (point2.is_some()){
-                                let dx = point1.unwrap().x - point2.unwrap().x;
-                                let dy = point1.unwrap().y - point2.unwrap().y;
-                                canvasBounds.shift(dx, dy);
-                                for pixel in &mut whiteBoardData {
-                                    pixel.point.x += dx;
-                                    pixel.point.y += dy;
-                                }
-                            }
-                        }
-                        else {
-                            let mut pointList: Vec<Point> = Vec::new();
-                            point1 = Some(Point::new(x as i32, y as i32));
-                            if (point1.is_some() && point2.is_some()) {
-                                makeLine(&mut pointList, point1.unwrap(), point2.unwrap());
-                                for point in pointList.into_iter() {
-                                    let pixel: Pixel = Pixel { point, color: (currentColor) };
-                                    if (canvasBounds.isInside(pixel.point)) {
-                                        whiteBoardData.push(pixel);
-                                    }
-                                    canvas.set_draw_color(currentColor);
-                                    let result = canvas.draw_point(point);
-                                }
-                            }
+                    if (!mouseHeldDown){break 'mouse;}
+                    point1 = Some(Point::new(x as i32, y as i32));
+                    if (isMovingCanvas) {
+                        needsDraw = true;
+                        needsClear = true;
+                        if (point2.is_some()){
+                            let dx = point1.unwrap().x - point2.unwrap().x;
+                            let dy = point1.unwrap().y - point2.unwrap().y;
+                            canvasBounds.shift(dx, dy);
                         }
                         point2 = point1;
+                        break 'mouse;
                     }
+                    point1 = Some(Point::new(x as i32, y as i32));
+                    if (point1.is_some() && point2.is_some()) {
+                        let mut pointList: Vec<Point> = Vec::new();
+                        makeLine(&mut pointList, point1.unwrap(), point2.unwrap());
+                        for point in pointList {
+                            if (canvasBounds.isInside(point)) {
+                                let mut pushedPoint = point.clone();
+                                pushedPoint.x -= canvasBounds.x1;
+                                pushedPoint.y -= canvasBounds.y1;
+                                let mut pointDrawn = false;
+                                for pixels in &mut PixelsVec {
+                                    if (pixels.color == currentColor) {
+                                        pixels.points.push(pushedPoint.into());
+                                        pointDrawn = true;
+                                        break;
+                                    }
+                                }
+                                if (!pointDrawn) {
+                                    let pixels = Pixels {points: vec![pushedPoint.into()], color: currentColor};
+                                    PixelsVec.push(pixels);
+                                }
+                                canvas.set_draw_color(currentColor);
+                                let result = canvas.draw_point(point);
+                            }
+                        }
+                    }
+                    point2 = point1;
                 },
                 _ => {}
-
             }
         }
         if (needsClear){
@@ -204,13 +218,16 @@ fn main() {
             let result = canvas.fill_rect(FRect::new(canvasBounds.x1 as f32, canvasBounds.y1 as f32, canvasBounds.width() as f32, canvasBounds.height() as f32));
         }
         if (needsDraw){
-            for pixel in &whiteBoardData {
-                canvas.set_draw_color(pixel.color);
-                let result = canvas.draw_point(pixel.point);
+            let oldViewport = canvas.viewport();
+            canvas.set_viewport(Rect::new(canvasBounds.x1, canvasBounds.y1, canvasBounds.width() as u32, canvasBounds.height() as u32));
+            for pixels in &PixelsVec {
+                canvas.set_draw_color(pixels.color);
+                let result2 = canvas.draw_points(pixels.points.as_slice());
             }
+            canvas.set_viewport(oldViewport);
         }
         // call at the end of every loop
         canvas.present();
-        sleep(Duration::new(0, 1_000_000_000u32 / 60));
+        sleep(Duration::new(0, 500_000_000u32 / 60));
     }
 }
