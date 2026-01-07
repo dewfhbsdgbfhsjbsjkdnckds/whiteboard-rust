@@ -101,9 +101,6 @@ fn makeLine(list: &mut Vec<Point>, point1: Point, point2: Point){
 // different brush sizes
 // change brush colour
 // add inserting text
-
-// i need to optimise this
-// it uses more cpu the more things are drawn on
 fn main() {
     let sdl_context: Sdl = sdl3::init().unwrap();
     let video_subsystem:VideoSubsystem = sdl_context.video().unwrap();
@@ -128,17 +125,8 @@ fn main() {
     let mut isMovingCanvas = false;
     let mut event_pump = sdl_context.event_pump().unwrap();
     let /*mut*/ currentColor = Color::RGB(255, 255, 255);
-    // maybe i could optimise on space by not storing the colour of every single pixel
-    // i could do like struct thing{ color: Color, Vec<Pixels,}
-    // Vec<thing>
-    // that way if the user does a lot of drawing in a small amoutn of colors then it will store
-    // much less data
-    // however, if you use a lot of different colors, then a lot of different structs will be stored
-    // maybe i could switch between different storage modes based on the sizeof a vs sizeof b
-    // idk if using two different data structures and switching between them is a good idea
-    // has one struct Pixels per colour in the canvas
     let mut PixelsVec: Vec<Pixels> = Vec::new();
-    let mut point1: Option<Point>;
+    let mut point1: Point;
     let mut point2: Option<Point> = None;
     'running: loop {
         let mut needsDraw = false;
@@ -168,22 +156,22 @@ fn main() {
                 Event::MouseMotion {x, y, ..} => 'mouse: {
                     // this might be a little too much indentation lol
                     if (!mouseHeldDown){break 'mouse;}
-                    point1 = Some(Point::new(x as i32, y as i32));
+                    point1 = Point::new(x as i32, y as i32);
                     if (isMovingCanvas) {
                         needsDraw = true;
                         needsClear = true;
                         if (point2.is_some()){
-                            let dx = point1.unwrap().x - point2.unwrap().x;
-                            let dy = point1.unwrap().y - point2.unwrap().y;
+                            let dx = point1.x - point2.unwrap().x;
+                            let dy = point1.y - point2.unwrap().y;
                             canvasBounds.shift(dx, dy);
                         }
-                        point2 = point1;
+                        point2 = Some(point1);
                         break 'mouse;
                     }
-                    point1 = Some(Point::new(x as i32, y as i32));
-                    if (point1.is_some() && point2.is_some()) {
+                    point1 = Point::new(x as i32, y as i32);
+                    if (point2.is_some()) {
                         let mut pointList: Vec<Point> = Vec::new();
-                        makeLine(&mut pointList, point1.unwrap(), point2.unwrap());
+                        makeLine(&mut pointList, point1, point2.unwrap());
                         for point in pointList {
                             if (canvasBounds.isInside(point)) {
                                 let mut pushedPoint = point.clone();
@@ -206,7 +194,7 @@ fn main() {
                             }
                         }
                     }
-                    point2 = point1;
+                    point2 = Some(point1);
                 },
                 _ => {}
             }
