@@ -20,7 +20,6 @@ use std::thread::sleep;
 use std::time::Duration;
 //use sdl3::sys::vulkan::*;
 //use sdl3::sys::vulkan::VkSurfaceKHR
-//test
 
 #[derive(Debug)]
 struct Pixels {
@@ -66,6 +65,9 @@ impl CanvasSize {
     }
     fn height(&self) -> i32 {
         return self.y2 - self.y1;
+    }
+    fn toFRect(&self) -> FRect {
+        return FRect::new(self.x1 as f32, self.y1 as f32, self.width() as f32, self.height() as f32);
     }
 }
 
@@ -119,9 +121,7 @@ fn makeLine(list: &mut Vec<Point>, point1: Point, point2: Point){
 
 fn mouseMovement(whiteboard: &mut Whiteboard, point1: Point, point2: Point, toolMode: &ToolMode, color: Color){
     match toolMode {
-        ToolMode::none => {
-            return;
-        },
+        ToolMode::none => {},
         ToolMode::movingCanvas => {
             let dx = point1.x - point2.x;
             let dy = point1.y - point2.y;
@@ -172,7 +172,6 @@ fn mouseMovement(whiteboard: &mut Whiteboard, point1: Point, point2: Point, tool
                 }
             }
         }
-
     }
 }
 
@@ -190,7 +189,6 @@ fn main() {
 
     const width: u32 = 900;
     const height: u32 = 500;
-    const bgcolor: Color = Color::RGB(40, 40, 40);
     let window = video_subsystem.window("whiteboard", width, height)
         .set_window_flags(SDL_WINDOW_RESIZABLE as u32) // casting? still works?
         .position_centered()
@@ -199,7 +197,7 @@ fn main() {
 
     let canvas = window.into_canvas();
     let canvasBounds: CanvasSize = CanvasSize {x1: 0, y1: 0, x2: width as i32, y2: height as i32};
-    let mut whiteboard = Whiteboard {canvasBounds, canvas, pixels: Vec::new(), bgcolor};
+    let mut whiteboard = Whiteboard {canvasBounds, canvas, pixels: Vec::new(), bgcolor: Color::RGB(40, 40, 40)};
     let mut toolMode = ToolMode::pencil;
 
     whiteboard.canvas.set_draw_color(Color::RGB(0, 0, 0));
@@ -234,8 +232,6 @@ fn main() {
                 },
                 Event::MouseMotion {x, y, ..} => {
                     point1 = Point::new(x as i32, y as i32);
-                    needsDraw = true;
-                    needsClear = true;
                     if (mouseHeldDown && point2.is_some()) {
                         mouseMovement(&mut whiteboard, point1, point2.unwrap(), &toolMode, currentColor);
                     }
@@ -244,21 +240,20 @@ fn main() {
                 _ => {}
             }
         }
-        if (needsClear){
-            whiteboard.canvas.set_draw_color(bgcolor);
-            whiteboard.canvas.clear();
-            whiteboard.canvas.set_draw_color(Color::RGB(0, 0, 0));
-            let result = whiteboard.canvas.fill_rect(FRect::new(whiteboard.canvasBounds.x1 as f32, whiteboard.canvasBounds.y1 as f32, whiteboard.canvasBounds.width() as f32, whiteboard.canvasBounds.height() as f32));
-        }
-        if (needsDraw){
-            let oldViewport = whiteboard.canvas.viewport();
-            whiteboard.canvas.set_viewport(Rect::new(whiteboard.canvasBounds.x1, whiteboard.canvasBounds.y1, whiteboard.canvasBounds.width() as u32, whiteboard.canvasBounds.height() as u32));
-            //for pixels in &PixelsVec {
-            //    canvas.set_draw_color(pixels.color);
-            //    //let result2 = canvas.draw_points(pixels.points.as_slice());
-            //}
-            whiteboard.canvas.set_viewport(oldViewport);
-        }
+        whiteboard.canvas.set_draw_color(whiteboard.bgcolor);
+        whiteboard.canvas.clear();
+        whiteboard.canvas.set_draw_color(Color::RGB(0, 0, 0));
+        let result = whiteboard.canvas.fill_rect(whiteboard.canvasBounds.toFRect());
+        // theres some bug here that makes moving the canvas around break for some reason
+        //if (needsDraw){
+        //    let oldViewport = whiteboard.canvas.viewport();
+        //    whiteboard.canvas.set_viewport(Rect::new(whiteboard.canvasBounds.x1, whiteboard.canvasBounds.y1, whiteboard.canvasBounds.width() as u32, whiteboard.canvasBounds.height() as u32));
+        ////    //for pixels in &PixelsVec {
+        ////    //    canvas.set_draw_color(pixels.color);
+        ////    //    //let result2 = canvas.draw_points(pixels.points.as_slice());
+        ////    //}
+        //    whiteboard.canvas.set_viewport(oldViewport);
+        //}
         // call at the end of every loop
         whiteboard.canvas.present();
         sleep(Duration::new(0, 500_000_000u32 / 60));
