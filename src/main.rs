@@ -4,13 +4,16 @@
     non_upper_case_globals,
     unused_imports,
     unused_parens,
-    non_camel_case_types
+    non_camel_case_types,
+    unused,
+    dead_code
 )]
 //extern crate sdl3;
 
 use sdl3::Sdl;
 use sdl3::VideoSubsystem;
 use sdl3::event::Event;
+use sdl3::gpu::Device;
 use sdl3::keyboard::Keycode;
 use sdl3::pixels::Color;
 use sdl3::rect::Point;
@@ -18,6 +21,7 @@ use sdl3::rect::Rect;
 use sdl3::render::Canvas;
 use sdl3::render::FPoint;
 use sdl3::render::FRect;
+use sdl3::sys::gpu::SDL_CreateGPUDevice;
 use sdl3::sys::keycode::SDLK_SPACE;
 use sdl3::sys::video::SDL_WINDOW_RESIZABLE;
 use sdl3::video::Window;
@@ -25,8 +29,6 @@ use std::ops::Deref;
 use std::ops::Index;
 use std::thread::sleep;
 use std::time::Duration;
-//use sdl3::sys::vulkan::*;
-//use sdl3::sys::vulkan::VkSurfaceKHR
 
 #[derive(Debug)]
 struct Pixels {
@@ -35,7 +37,7 @@ struct Pixels {
 }
 
 // maybe just rename this to square or something idk
-struct Square {
+struct IntRect {
     x1: i32,
     y1: i32,
     x2: i32,
@@ -43,38 +45,37 @@ struct Square {
 }
 
 struct Whiteboard {
-    canvasBounds: Square,
-    canvas: Canvas<Window>,
+    canvasBounds: IntRect,
+    //canvas: Canvas<Window>,
     pixels: Vec<Pixels>,
     bgcolor: Color,
 }
 
+#[derive(PartialEq, Clone, Copy, Debug)]
 enum ToolMode {
     none,
     pencil,
     eraser,
     movingCanvas,
 }
+
 trait meow {
-    fn isInside(&self, square: &Square) -> bool;
+    fn isInside(&self, square: &IntRect) -> bool;
 }
 impl meow for Point {
-    fn isInside(&self, square: &Square) -> bool {
+    fn isInside(&self, square: &IntRect) -> bool {
         return self.x >= square.x1
             && self.y >= square.y1
             && self.x < square.x2
             && self.y < square.y2;
     }
 }
-impl Square {
+impl IntRect {
     fn shift(&mut self, x: i32, y: i32) {
         self.x1 += x;
         self.x2 += x;
         self.y1 += y;
         self.y2 += y;
-    }
-    fn isInside(&self, point: Point) -> bool {
-        return point.x >= self.x1 && point.y >= self.y1 && point.x < self.x2 && point.y < self.y2;
     }
     fn width(&self) -> u32 {
         return (self.x2 - self.x1) as u32;
@@ -194,8 +195,8 @@ fn mouseMovement(
                     };
                     whiteboard.pixels.push(pixels);
                 }
-                whiteboard.canvas.set_draw_color(color);
-                let result = whiteboard.canvas.draw_point(point);
+                //whiteboard.canvas.set_draw_color(color);
+                //let result = whiteboard.canvas.draw_point(point);
             }
         }
         ToolMode::eraser => {
@@ -214,8 +215,8 @@ fn mouseMovement(
                             if (eraserPoint == *point) {
                                 // swap remove is faster and i dont need order
                                 pixels.points.swap_remove(i);
-                                whiteboard.canvas.set_draw_color(color);
-                                let result = whiteboard.canvas.draw_point(eraserPoint);
+                                //whiteboard.canvas.set_draw_color(color);
+                                //let result = whiteboard.canvas.draw_point(eraserPoint);
                                 break 'inner;
                             }
                         }
@@ -243,9 +244,13 @@ fn main() {
         .position_centered()
         .build()
         .unwrap();
+    //let canvas = window.into_canvas();
 
-    let canvas = window.into_canvas();
-    let canvasBounds: Square = Square {
+    // needs shader format, such as SPIRV, MSL, etc
+    let device = Device::new(sdl3::gpu::ShaderFormat::SPIRV, true).unwrap();
+    let result = device.with_window(&window);
+
+    let canvasBounds: IntRect = IntRect {
         x1: 0,
         y1: 0,
         x2: width as i32,
@@ -253,15 +258,16 @@ fn main() {
     };
     let mut whiteboard = Whiteboard {
         canvasBounds,
-        canvas,
-        pixels: Vec::new(),
+        //canvas,
+        pixels: Vec::with_capacity(10_000),
         bgcolor: Color::RGB(40, 40, 40),
     };
-    let mut toolMode = ToolMode::none;
+    let mut toolMode = ToolMode::pencil;
+    let mut oldTool = ToolMode::none;
 
-    whiteboard.canvas.set_draw_color(Color::RGB(0, 0, 0));
-    whiteboard.canvas.clear();
-    whiteboard.canvas.present();
+    //whiteboard.canvas.set_draw_color(Color::RGB(0, 0, 0));
+    //whiteboard.canvas.clear();
+    //whiteboard.canvas.present();
 
     let mut mouseHeldDown = false;
     let mut event_pump = sdl_context.event_pump().unwrap();
@@ -269,7 +275,7 @@ fn main() {
     let mut point1: Point;
     let mut point2: Option<Point> = None;
     'running: loop {
-        let mut needsDraw = false;
+        let /*mut*/ needsDraw = false;
         let mut needsClear = false;
         for event in event_pump.poll_iter() {
             match event {
@@ -288,20 +294,38 @@ fn main() {
                     point2 = None;
                 }
                 Event::KeyDown {
+                    keycode: Some(Keycode::E),
+                    ..
+                } => {
+                    toolMode = ToolMode::eraser;
+                }
+                Event::KeyDown {
+                    keycode: Some(Keycode::B),
+                    ..
+                } => {
+                    toolMode = ToolMode::pencil;
+                }
+                Event::KeyDown {
                     keycode: Some(Keycode::Space),
                     ..
                 } => {
+                    if (toolMode != ToolMode::movingCanvas) {
+                        oldTool = toolMode;
+                    }
                     toolMode = ToolMode::movingCanvas;
                 }
                 Event::KeyUp {
                     keycode: Some(Keycode::Space),
                     ..
                 } => {
-                    toolMode = ToolMode::none;
+                    toolMode = oldTool;
                 }
                 Event::MouseMotion { x, y, .. } => {
                     point1 = Point::new(x as i32, y as i32);
                     if (mouseHeldDown && point2.is_some()) {
+                        if (toolMode == ToolMode::movingCanvas) {
+                            needsClear = true;
+                        }
                         mouseMovement(
                             &mut whiteboard,
                             point1,
@@ -315,25 +339,27 @@ fn main() {
                 _ => {}
             }
         }
-        whiteboard.canvas.set_draw_color(whiteboard.bgcolor);
-        whiteboard.canvas.clear();
-        whiteboard.canvas.set_draw_color(Color::RGB(0, 0, 0));
-        let result = whiteboard
-            .canvas
-            .fill_rect(whiteboard.canvasBounds.toFRect());
+        if (needsClear) {
+            //whiteboard.canvas.set_draw_color(whiteboard.bgcolor);
+            //whiteboard.canvas.clear();
+            //whiteboard.canvas.set_draw_color(Color::RGB(0, 0, 0));
+            //let result = whiteboard
+            //    .canvas
+            //    .fill_rect(whiteboard.canvasBounds.toFRect());
+        }
         if (needsDraw) {
-            let oldViewport = whiteboard.canvas.viewport();
-            whiteboard
-                .canvas
-                .set_viewport(whiteboard.canvasBounds.toRect());
+            //let oldViewport = whiteboard.canvas.viewport();
+            //whiteboard
+            //    .canvas
+            //    .set_viewport(whiteboard.canvasBounds.toRect());
             //    //for pixels in &PixelsVec {
             //    //    canvas.set_draw_color(pixels.color);
             //    //    //let result2 = canvas.draw_points(pixels.points.as_slice());
             //    //}
-            whiteboard.canvas.set_viewport(oldViewport);
+            //whiteboard.canvas.set_viewport(oldViewport);
         }
         // call at the end of every loop
-        whiteboard.canvas.present();
+        //whiteboard.canvas.present();
         sleep(Duration::new(0, 500_000_000u32 / 60));
     }
 }
