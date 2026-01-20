@@ -13,7 +13,10 @@
 use sdl3::Sdl;
 use sdl3::VideoSubsystem;
 use sdl3::event::Event;
+use sdl3::gpu::ColorTargetInfo;
 use sdl3::gpu::Device;
+use sdl3::gpu::LoadOp;
+use sdl3::gpu::{DepthStencilTargetInfo, StoreOp};
 use sdl3::keyboard::Keycode;
 use sdl3::pixels::Color;
 use sdl3::rect::Point;
@@ -21,7 +24,7 @@ use sdl3::rect::Rect;
 use sdl3::render::Canvas;
 use sdl3::render::FPoint;
 use sdl3::render::FRect;
-use sdl3::sys::gpu::SDL_CreateGPUDevice;
+use sdl3::sys::gpu::SDL_GPUColorTargetInfo;
 use sdl3::sys::keycode::SDLK_SPACE;
 use sdl3::sys::video::SDL_WINDOW_RESIZABLE;
 use sdl3::video::Window;
@@ -244,11 +247,12 @@ fn main() {
         .position_centered()
         .build()
         .unwrap();
-    //let canvas = window.into_canvas();
 
     // needs shader format, such as SPIRV, MSL, etc
-    let device = Device::new(sdl3::gpu::ShaderFormat::SPIRV, true).unwrap();
-    let result = device.with_window(&window);
+    let device = Device::new(sdl3::gpu::ShaderFormat::SPIRV, true)
+        .unwrap()
+        .with_window(&window)
+        .unwrap();
 
     let canvasBounds: IntRect = IntRect {
         x1: 0,
@@ -339,6 +343,41 @@ fn main() {
                 _ => {}
             }
         }
+
+        // DRAWING
+        let mut commandBuffer = device.acquire_command_buffer().unwrap();
+        let mut swapchainTexture = commandBuffer
+            .wait_and_acquire_swapchain_texture(&window)
+            .unwrap();
+        let targetInfo: ColorTargetInfo = sdl3::gpu::ColorTargetInfo::default()
+            .with_texture(&swapchainTexture)
+            .with_clear_color(Color::RGB(100, 100, 100))
+            .with_load_op(LoadOp::CLEAR)
+            .with_store_op(StoreOp::STORE);
+        let textureCreateInfo = sdl3::gpu::TextureCreateInfo::new()
+            // the texture should be the same width and height as the render target
+            .with_width(window.size_in_pixels().0)
+            .with_height(window.size_in_pixels().1)
+            .with_layer_count_or_depth(1)
+            .with_num_levels(1)
+            .with_usage(sdl3::gpu::TextureUsage::DEPTH_STENCIL_TARGET)
+            // 24 bits for depth, 8 bits for stencil
+            .with_format(sdl3::gpu::TextureFormat::D24UnormS8Uint);
+        let mut depthStencilTexture: sdl3::gpu::Texture =
+            device.create_texture(textureCreateInfo).unwrap();
+        let depthStencilTarget = DepthStencilTargetInfo::new()
+            .with_texture(&mut depthStencilTexture)
+            .with_stencil_load_op(LoadOp::CLEAR)
+            .with_stencil_store_op(StoreOp::STORE)
+            .with_clear_depth(-1.0)
+            .with_clear_stencil(1);
+        let renderPass = device
+            .begin_render_pass(&commandBuffer, &[targetInfo], Some(&depthStencilTarget))
+            .unwrap();
+        device.end_render_pass(renderPass);
+
+        let result = commandBuffer.submit();
+
         if (needsClear) {
             //whiteboard.canvas.set_draw_color(whiteboard.bgcolor);
             //whiteboard.canvas.clear();
