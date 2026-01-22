@@ -13,10 +13,13 @@
 use sdl3::Sdl;
 use sdl3::VideoSubsystem;
 use sdl3::event::Event;
-use sdl3::gpu::ColorTargetInfo;
+use sdl3::event::WindowEvent;
 use sdl3::gpu::Device;
 use sdl3::gpu::LoadOp;
-use sdl3::gpu::{DepthStencilTargetInfo, StoreOp};
+use sdl3::gpu::{
+    ColorTargetInfo, DepthStencilTargetInfo, StoreOp, TextureCreateInfo, TextureFormat,
+    TextureUsage,
+};
 use sdl3::keyboard::Keycode;
 use sdl3::pixels::Color;
 use sdl3::rect::Point;
@@ -309,6 +312,40 @@ fn main() {
                 } => {
                     toolMode = ToolMode::pencil;
                 }
+                Event::Window {
+                    win_event: WindowEvent::Resized(x, y),
+                    ..
+                } => {
+                    let mut commandBuffer = device.acquire_command_buffer().unwrap();
+                    let mut swapchainTexture = commandBuffer
+                        .wait_and_acquire_swapchain_texture(&window)
+                        .unwrap();
+                    let targetInfo: ColorTargetInfo = sdl3::gpu::ColorTargetInfo::default()
+                        .with_texture(&swapchainTexture)
+                        .with_clear_color(Color::RGB(100, 100, 100))
+                        .with_load_op(LoadOp::CLEAR)
+                        .with_store_op(StoreOp::STORE);
+                    let textureCreateInfo = sdl3::gpu::TextureCreateInfo::new()
+                        // the texture should be the same width and height as the render target
+                        //.with_width(window.size_in_pixels().0)
+                        .with_width(window.size().0)
+                        //.with_height(window.size_in_pixels().1)
+                        .with_height(window.size().1)
+                        .with_layer_count_or_depth(1)
+                        .with_num_levels(1)
+                        .with_usage(sdl3::gpu::TextureUsage::DEPTH_STENCIL_TARGET)
+                        // 24 bits for depth, 8 bits for stencil
+                        .with_format(sdl3::gpu::TextureFormat::D24UnormS8Uint);
+                    let mut depthStencilTexture: sdl3::gpu::Texture =
+                        device.create_texture(textureCreateInfo).unwrap();
+                    let depthStencilTarget =
+                        DepthStencilTargetInfo::new().with_texture(&mut depthStencilTexture);
+                    let renderPass = device
+                        .begin_render_pass(&commandBuffer, &[targetInfo], Some(&depthStencilTarget))
+                        .unwrap();
+                    device.end_render_pass(renderPass);
+                    let result = commandBuffer.submit();
+                }
                 Event::KeyDown {
                     keycode: Some(Keycode::Space),
                     ..
@@ -349,56 +386,49 @@ fn main() {
         let mut swapchainTexture = commandBuffer
             .wait_and_acquire_swapchain_texture(&window)
             .unwrap();
-        let targetInfo: ColorTargetInfo = sdl3::gpu::ColorTargetInfo::default()
+        let targetInfo: ColorTargetInfo = ColorTargetInfo::default()
             .with_texture(&swapchainTexture)
-            .with_clear_color(Color::RGB(100, 100, 100))
+            .with_clear_color(whiteboard.bgcolor)
             .with_load_op(LoadOp::CLEAR)
             .with_store_op(StoreOp::STORE);
-        let textureCreateInfo = sdl3::gpu::TextureCreateInfo::new()
+        let textureCreateInfo = TextureCreateInfo::new()
             // the texture should be the same width and height as the render target
-            .with_width(window.size_in_pixels().0)
-            .with_height(window.size_in_pixels().1)
+            .with_width(window.size().0)
+            .with_height(window.size().1)
             .with_layer_count_or_depth(1)
             .with_num_levels(1)
-            .with_usage(sdl3::gpu::TextureUsage::DEPTH_STENCIL_TARGET)
+            .with_usage(TextureUsage::DEPTH_STENCIL_TARGET)
             // 24 bits for depth, 8 bits for stencil
-            .with_format(sdl3::gpu::TextureFormat::D24UnormS8Uint);
+            .with_format(TextureFormat::D24UnormS8Uint);
         let mut depthStencilTexture: sdl3::gpu::Texture =
             device.create_texture(textureCreateInfo).unwrap();
         let depthStencilTarget = DepthStencilTargetInfo::new()
             .with_texture(&mut depthStencilTexture)
-            .with_stencil_load_op(LoadOp::CLEAR)
-            .with_stencil_store_op(StoreOp::STORE)
-            .with_clear_depth(-1.0)
-            .with_clear_stencil(1);
+            //.with_stencil_load_op(LoadOp::CLEAR)
+            //.with_stencil_store_op(StoreOp::STORE)
+            //.with_clear_depth(-1.0)
+            //.with_clear_stencil(1)
+            ;
         let renderPass = device
             .begin_render_pass(&commandBuffer, &[targetInfo], Some(&depthStencilTarget))
             .unwrap();
         device.end_render_pass(renderPass);
 
-        let result = commandBuffer.submit();
+        let texInfo = TextureCreateInfo::new()
+            // sometimes the texture should be smaller because not all of the canvas is on screen
+            .with_width(whiteboard.canvasBounds.width())
+            .with_height(whiteboard.canvasBounds.height())
+            .with_num_levels(1)
+            .with_layer_count_or_depth(1)
+            .with_usage(TextureUsage::SAMPLER)
+            .with_format(TextureFormat::R8g8b8a8UnormSrgb)
 
-        if (needsClear) {
-            //whiteboard.canvas.set_draw_color(whiteboard.bgcolor);
-            //whiteboard.canvas.clear();
-            //whiteboard.canvas.set_draw_color(Color::RGB(0, 0, 0));
-            //let result = whiteboard
-            //    .canvas
-            //    .fill_rect(whiteboard.canvasBounds.toFRect());
-        }
-        if (needsDraw) {
-            //let oldViewport = whiteboard.canvas.viewport();
-            //whiteboard
-            //    .canvas
-            //    .set_viewport(whiteboard.canvasBounds.toRect());
-            //    //for pixels in &PixelsVec {
-            //    //    canvas.set_draw_color(pixels.color);
-            //    //    //let result2 = canvas.draw_points(pixels.points.as_slice());
-            //    //}
-            //whiteboard.canvas.set_viewport(oldViewport);
-        }
+        // render a single quad that covers the screen and give it a texture?
+        // color is rgba, 8 bits each, 32 bits in total, u32
+        if (needsClear) {}
+        if (needsDraw) {}
         // call at the end of every loop
-        //whiteboard.canvas.present();
-        sleep(Duration::new(0, 500_000_000u32 / 60));
+        let result = commandBuffer.submit();
+        sleep(Duration::new(0, 100_000_000u32 / 60));
     }
 }
