@@ -20,6 +20,9 @@ use sdl3::gpu::{
     ColorTargetInfo, DepthStencilTargetInfo, StoreOp, TextureCreateInfo, TextureFormat,
     TextureUsage,
 };
+use sdl3::hint::Hint;
+use sdl3::hint::names;
+use sdl3::hint::set_with_priority;
 use sdl3::keyboard::Keycode;
 use sdl3::pixels::Color;
 use sdl3::rect::Point;
@@ -31,10 +34,10 @@ use sdl3::sys::gpu::SDL_GPUColorTargetInfo;
 use sdl3::sys::keycode::SDLK_SPACE;
 use sdl3::sys::video::SDL_WINDOW_RESIZABLE;
 use sdl3::video::Window;
-use std::ops::Deref;
 use std::ops::Index;
 use std::thread::sleep;
 use std::time::Duration;
+
 
 #[derive(Debug)]
 struct Pixels {
@@ -239,6 +242,8 @@ fn mouseMovement(
 // change brush colour
 // add inserting text
 fn main() {
+    println!("{}", (meow as f32).cos());
+    set_with_priority(names::VIDEO_DRIVER, "wayland", &Hint::Override);
     let sdl_context: Sdl = sdl3::init().unwrap();
     let video_subsystem: VideoSubsystem = sdl_context.video().unwrap();
 
@@ -316,35 +321,6 @@ fn main() {
                     win_event: WindowEvent::Resized(x, y),
                     ..
                 } => {
-                    let mut commandBuffer = device.acquire_command_buffer().unwrap();
-                    let mut swapchainTexture = commandBuffer
-                        .wait_and_acquire_swapchain_texture(&window)
-                        .unwrap();
-                    let targetInfo: ColorTargetInfo = sdl3::gpu::ColorTargetInfo::default()
-                        .with_texture(&swapchainTexture)
-                        .with_clear_color(Color::RGB(100, 100, 100))
-                        .with_load_op(LoadOp::CLEAR)
-                        .with_store_op(StoreOp::STORE);
-                    let textureCreateInfo = sdl3::gpu::TextureCreateInfo::new()
-                        // the texture should be the same width and height as the render target
-                        //.with_width(window.size_in_pixels().0)
-                        .with_width(window.size().0)
-                        //.with_height(window.size_in_pixels().1)
-                        .with_height(window.size().1)
-                        .with_layer_count_or_depth(1)
-                        .with_num_levels(1)
-                        .with_usage(sdl3::gpu::TextureUsage::DEPTH_STENCIL_TARGET)
-                        // 24 bits for depth, 8 bits for stencil
-                        .with_format(sdl3::gpu::TextureFormat::D24UnormS8Uint);
-                    let mut depthStencilTexture: sdl3::gpu::Texture =
-                        device.create_texture(textureCreateInfo).unwrap();
-                    let depthStencilTarget =
-                        DepthStencilTargetInfo::new().with_texture(&mut depthStencilTexture);
-                    let renderPass = device
-                        .begin_render_pass(&commandBuffer, &[targetInfo], Some(&depthStencilTarget))
-                        .unwrap();
-                    device.end_render_pass(renderPass);
-                    let result = commandBuffer.submit();
                 }
                 Event::KeyDown {
                     keycode: Some(Keycode::Space),
@@ -404,13 +380,14 @@ fn main() {
             device.create_texture(textureCreateInfo).unwrap();
         let depthStencilTarget = DepthStencilTargetInfo::new()
             .with_texture(&mut depthStencilTexture)
+            //.with_cycle(true)
             //.with_stencil_load_op(LoadOp::CLEAR)
             //.with_stencil_store_op(StoreOp::STORE)
             //.with_clear_depth(-1.0)
             //.with_clear_stencil(1)
             ;
         let renderPass = device
-            .begin_render_pass(&commandBuffer, &[targetInfo], Some(&depthStencilTarget))
+            .begin_render_pass(&commandBuffer, &[targetInfo], /*Some(&depthStencilTarget)*/ None)
             .unwrap();
         device.end_render_pass(renderPass);
 
@@ -421,7 +398,7 @@ fn main() {
             .with_num_levels(1)
             .with_layer_count_or_depth(1)
             .with_usage(TextureUsage::SAMPLER)
-            .with_format(TextureFormat::R8g8b8a8UnormSrgb)
+            .with_format(TextureFormat::R8g8b8a8UnormSrgb);
 
         // render a single quad that covers the screen and give it a texture?
         // color is rgba, 8 bits each, 32 bits in total, u32
@@ -429,6 +406,8 @@ fn main() {
         if (needsDraw) {}
         // call at the end of every loop
         let result = commandBuffer.submit();
-        sleep(Duration::new(0, 100_000_000u32 / 60));
+        let targetFPS = 144;
+        sleep(Duration::new(0, 1_000_000_000u32 / targetFPS));
+        //sdl3::timer::delay(16);
     }
 }
