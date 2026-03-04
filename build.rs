@@ -10,6 +10,7 @@
 )]
 
 use std::{os::unix::process::CommandExt, process::Command, thread::sleep, time::Duration};
+// todo change this to use Crate glsl for compiling into spirv
 
 fn main() {
     // glslc -fshader-stage=vertex -o vertex.spv vertex.glsl
