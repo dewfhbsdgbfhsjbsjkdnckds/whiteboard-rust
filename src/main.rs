@@ -10,12 +10,22 @@
 )]
 //extern crate sdl3;
 
+use sdl3::Error;
 use sdl3::Sdl;
 use sdl3::VideoSubsystem;
 use sdl3::event::Event;
 use sdl3::event::WindowEvent;
 use sdl3::gpu::Device;
+use sdl3::gpu::FillMode;
+use sdl3::gpu::GraphicsPipeline;
+use sdl3::gpu::GraphicsPipelineBuilder;
+use sdl3::gpu::GraphicsPipelineTargetInfo;
 use sdl3::gpu::LoadOp;
+use sdl3::gpu::RasterizerState;
+use sdl3::gpu::Shader;
+use sdl3::gpu::ShaderFormat;
+use sdl3::gpu::ShaderStage;
+use sdl3::gpu::Viewport;
 use sdl3::gpu::{
     ColorTargetInfo, DepthStencilTargetInfo, StoreOp, TextureCreateInfo, TextureFormat,
     TextureUsage,
@@ -34,10 +44,13 @@ use sdl3::sys::gpu::SDL_GPUColorTargetInfo;
 use sdl3::sys::keycode::SDLK_SPACE;
 use sdl3::sys::video::SDL_WINDOW_RESIZABLE;
 use sdl3::video::Window;
+use std::ffi::CStr;
 use std::ops::Index;
 use std::thread::sleep;
 use std::time::Duration;
 
+static vertexShaderCode: &'static [u8] = include_bytes!("shaders/vertex.spv");
+static fragShaderCode: &'static [u8] = include_bytes!("shaders/frag.spv");
 
 #[derive(Debug)]
 struct Pixels {
@@ -161,6 +174,39 @@ fn makeLine(list: &mut Vec<Point>, point1: Point, point2: Point) {
     }
 }
 
+fn loadShader(
+    device: &Device,
+    code: &[u8],
+    shaderStage: ShaderStage,
+    samplerCount: u32,
+    uniformBufferCount: u32,
+    storageBufferCount: u32,
+    storageTextureCount: u32,
+) -> Result<Shader, String> {
+    let stage: ShaderStage;
+    let entrypoint;
+    let shader_format = device.get_shader_formats();
+    if shader_format == ShaderFormat::SPIRV {}
+    match shader_format {
+        ShaderFormat::SPIRV => entrypoint = c"main",
+        _ => return Err("Unrecognised shader format".to_string()),
+    }
+    let shader = device
+        .create_shader()
+        .with_samplers(samplerCount)
+        .with_uniform_buffers(uniformBufferCount)
+        .with_storage_buffers(storageBufferCount)
+        .with_storage_textures(storageTextureCount)
+        .with_entrypoint(entrypoint)
+        .with_code(device.get_shader_formats(), code, shaderStage)
+        .build();
+    if let Ok(shader) = shader {
+        return Ok(shader);
+    } else {
+        return Err("shader failed to build".to_string());
+    }
+}
+
 fn mouseMovement(
     whiteboard: &mut Whiteboard,
     point1: Point,
@@ -241,8 +287,7 @@ fn mouseMovement(
 // different brush sizes
 // change brush colour
 // add inserting text
-fn main() {
-    println!("{}", (meow as f32).cos());
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     set_with_priority(names::VIDEO_DRIVER, "wayland", &Hint::Override);
     let sdl_context: Sdl = sdl3::init().unwrap();
     let video_subsystem: VideoSubsystem = sdl_context.video().unwrap();
@@ -250,7 +295,7 @@ fn main() {
     const width: u32 = 900;
     const height: u32 = 500;
     let window = video_subsystem
-        .window("whiteboard", width, height)
+        .window("window", width, height)
         .set_window_flags(SDL_WINDOW_RESIZABLE as u32) // casting? still works?
         .position_centered()
         .build()
@@ -261,6 +306,25 @@ fn main() {
         .unwrap()
         .with_window(&window)
         .unwrap();
+
+    println!("{:?}", fragShaderCode);
+    let ColorTargetDescriptions: &[sdl3::gpu::ColorTargetDescription] =
+        &[sdl3::gpu::ColorTargetDescription::new()
+            .with_format(device.get_swapchain_texture_format(&window))];
+    let vertexShader = loadShader(&device, vertexShaderCode, ShaderStage::Vertex, 0, 0, 0, 0)?;
+    let fragShader = loadShader(&device, fragShaderCode, ShaderStage::Fragment, 0, 0, 0, 0)?;
+    let pipelineCreateInfo: GraphicsPipelineBuilder = device
+        .create_graphics_pipeline()
+        .with_vertex_shader(&vertexShader)
+        .with_fragment_shader(&fragShader)
+        .with_target_info(
+            GraphicsPipelineTargetInfo::new()
+                .with_color_target_descriptions(ColorTargetDescriptions),
+        )
+        .with_primitive_type(sdl3::gpu::PrimitiveType::TriangleList)
+        .with_fill_mode(FillMode::Fill)
+        .with_rasterizer_state(RasterizerState::new().with_fill_mode(FillMode::Fill));
+    let pipeline: GraphicsPipeline = pipelineCreateInfo.build()?;
 
     let canvasBounds: IntRect = IntRect {
         x1: 0,
@@ -320,8 +384,7 @@ fn main() {
                 Event::Window {
                     win_event: WindowEvent::Resized(x, y),
                     ..
-                } => {
-                }
+                } => {}
                 Event::KeyDown {
                     keycode: Some(Keycode::Space),
                     ..
@@ -386,19 +449,38 @@ fn main() {
             //.with_clear_depth(-1.0)
             //.with_clear_stencil(1)
             ;
-        let renderPass = device
-            .begin_render_pass(&commandBuffer, &[targetInfo], /*Some(&depthStencilTarget)*/ None)
-            .unwrap();
+        let renderPass = device.begin_render_pass(
+            &commandBuffer,
+            &[targetInfo],
+            /*Some(&depthStencilTarget)*/ None,
+        )?;
+        renderPass.bind_graphics_pipeline(&pipeline);
+        //renderPass.set_scissor(Rect::new(320, 240, 320, 240));
+        device.set_viewport(
+            &renderPass,
+            Viewport::new(
+                0.0,
+                0.0,
+                window.size().0 as f32,
+                window.size().1 as f32,
+                0.1,
+                1.0,
+            ),
+        );
+        //println!("im drawing those primitives");
+        renderPass.draw_primitives(3, 1, 0, 0);
+        //renderPass.draw_indexed_primitives(3, 1, 0, 0, 0);
+
         device.end_render_pass(renderPass);
 
-        let texInfo = TextureCreateInfo::new()
-            // sometimes the texture should be smaller because not all of the canvas is on screen
-            .with_width(whiteboard.canvasBounds.width())
-            .with_height(whiteboard.canvasBounds.height())
-            .with_num_levels(1)
-            .with_layer_count_or_depth(1)
-            .with_usage(TextureUsage::SAMPLER)
-            .with_format(TextureFormat::R8g8b8a8UnormSrgb);
+        //let texInfo = TextureCreateInfo::new()
+        //    // sometimes the texture should be smaller because not all of the canvas is on screen
+        //    .with_width(whiteboard.canvasBounds.width())
+        //    .with_height(whiteboard.canvasBounds.height())
+        //    .with_num_levels(1)
+        //    .with_layer_count_or_depth(1)
+        //    .with_usage(TextureUsage::SAMPLER)
+        //    .with_format(TextureFormat::R8g8b8a8UnormSrgb);
 
         // render a single quad that covers the screen and give it a texture?
         // color is rgba, 8 bits each, 32 bits in total, u32
@@ -410,4 +492,5 @@ fn main() {
         sleep(Duration::new(0, 1_000_000_000u32 / targetFPS));
         //sdl3::timer::delay(16);
     }
+    return Ok(());
 }
