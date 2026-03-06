@@ -10,29 +10,42 @@
 )]
 //extern crate sdl3;
 
-use sdl3::Error;
-use sdl3::Sdl;
-use sdl3::VideoSubsystem;
 use sdl3::event::Event;
 use sdl3::event::WindowEvent;
+use sdl3::gpu::Buffer;
+use sdl3::gpu::BufferBinding;
+use sdl3::gpu::BufferRegion;
+use sdl3::gpu::BufferUsageFlags;
+use sdl3::gpu::CommandBuffer;
+use sdl3::gpu::CopyPass;
+use sdl3::gpu::CullMode;
 use sdl3::gpu::Device;
 use sdl3::gpu::FillMode;
 use sdl3::gpu::GraphicsPipeline;
 use sdl3::gpu::GraphicsPipelineBuilder;
 use sdl3::gpu::GraphicsPipelineTargetInfo;
+use sdl3::gpu::IndexElementSize;
 use sdl3::gpu::LoadOp;
 use sdl3::gpu::RasterizerState;
 use sdl3::gpu::Shader;
 use sdl3::gpu::ShaderFormat;
 use sdl3::gpu::ShaderStage;
+use sdl3::gpu::TransferBuffer;
+use sdl3::gpu::TransferBufferLocation;
+use sdl3::gpu::TransferBufferUsage;
+use sdl3::gpu::VertexAttribute;
+use sdl3::gpu::VertexBufferDescription;
+use sdl3::gpu::VertexElementFormat;
+use sdl3::gpu::VertexInputRate;
+use sdl3::gpu::VertexInputState;
 use sdl3::gpu::Viewport;
 use sdl3::gpu::{
     ColorTargetInfo, DepthStencilTargetInfo, StoreOp, TextureCreateInfo, TextureFormat,
     TextureUsage,
 };
-use sdl3::hint::Hint;
 use sdl3::hint::names;
 use sdl3::hint::set_with_priority;
+use sdl3::hint::Hint;
 use sdl3::keyboard::Keycode;
 use sdl3::pixels::Color;
 use sdl3::rect::Point;
@@ -44,7 +57,11 @@ use sdl3::sys::gpu::SDL_GPUColorTargetInfo;
 use sdl3::sys::keycode::SDLK_SPACE;
 use sdl3::sys::video::SDL_WINDOW_RESIZABLE;
 use sdl3::video::Window;
+use sdl3::Error;
+use sdl3::Sdl;
+use sdl3::VideoSubsystem;
 use std::ffi::CStr;
+use std::fmt::Debug;
 use std::ops::Index;
 use std::thread::sleep;
 use std::time::Duration;
@@ -282,6 +299,45 @@ fn mouseMovement(
     }
 }
 
+fn createBufferWithData<T: Copy + Debug>(
+    device: &Device,
+    copyPass: &CopyPass,
+    transferBuffer: &TransferBuffer,
+    data: &[T],
+) -> Result<Buffer, sdl3::Error> {
+    let dataSize = size_of_val(data) as u32;
+    let buffer = device
+        .create_buffer()
+        .with_size(dataSize)
+        .with_usage(BufferUsageFlags::VERTEX)
+        .build()?;
+
+    let mut bufferMemMap = transferBuffer.map(device, true);
+    let map: &mut [T] = bufferMemMap.mem_mut();
+    //map.clone_from_slice(data);
+    // done copying to memory
+    // maybe test to see if this works better
+    for (index, &value) in data.iter().enumerate() {
+        map[index] = value;
+    }
+    println!("{:?}", map);
+    bufferMemMap.unmap();
+
+    copyPass.upload_to_gpu_buffer(
+        TransferBufferLocation::new()
+            .with_transfer_buffer(&transferBuffer)
+            .with_offset(0),
+        BufferRegion::new()
+            .with_buffer(&buffer)
+            // todo add variable for this later or something
+            .with_offset(0)
+            .with_size(dataSize),
+        true,
+    );
+
+    return Ok(buffer);
+}
+
 // todo
 // undo feature
 // different brush sizes
@@ -307,7 +363,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_window(&window)
         .unwrap();
 
-    println!("{:?}", fragShaderCode);
+    //println!("{:?}", vertexShaderCode);
     let ColorTargetDescriptions: &[sdl3::gpu::ColorTargetDescription] =
         &[sdl3::gpu::ColorTargetDescription::new()
             .with_format(device.get_swapchain_texture_format(&window))];
@@ -321,10 +377,57 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             GraphicsPipelineTargetInfo::new()
                 .with_color_target_descriptions(ColorTargetDescriptions),
         )
+        .with_vertex_input_state(
+            VertexInputState::new()
+                .with_vertex_attributes(&[VertexAttribute::new()
+                    .with_format(VertexElementFormat::Float3)
+                    .with_buffer_slot(0)
+                    .with_location(0)
+                    .with_offset(0)])
+                .with_vertex_buffer_descriptions(&[VertexBufferDescription::new()
+                    .with_slot(0)
+                    .with_instance_step_rate(0)
+                    .with_pitch(size_of::<f32>() as u32)
+                    .with_input_rate(VertexInputRate::Vertex)]),
+        )
         .with_primitive_type(sdl3::gpu::PrimitiveType::TriangleList)
         .with_fill_mode(FillMode::Fill)
-        .with_rasterizer_state(RasterizerState::new().with_fill_mode(FillMode::Fill));
+        .with_rasterizer_state(
+            RasterizerState::new()
+                .with_fill_mode(FillMode::Fill)
+                .with_cull_mode(CullMode::None),
+        );
     let pipeline: GraphicsPipeline = pipelineCreateInfo.build()?;
+    drop(vertexShader);
+    drop(fragShader);
+
+    // copying vertex data to gpu
+    let mut commandBuffer = device.acquire_command_buffer().unwrap();
+    let copyPass = device.begin_copy_pass(&commandBuffer)?;
+    #[rustfmt::skip]
+    let vertexData: &[f32] = &[
+         0.5, 0.5, 0.0,
+         0.5, -0.5, 0.0,
+        -0.5, -0.5, 0.0,
+        -0.5, 0.5, 0.0
+    ];
+    #[rustfmt::skip]
+    let vertexIndicies: &[u16] = &[
+        //0, 1, 2
+        // must have 3, cant have 1
+        //2, 3, 0
+        0, 2, 1
+    ];
+    let transferBuffer = device
+        .create_transfer_buffer()
+        .with_usage(TransferBufferUsage::UPLOAD)
+        .with_size((size_of_val(vertexIndicies) as u32).max(size_of_val(vertexData) as u32))
+        .build()?;
+    let vertexBuffer = createBufferWithData(&device, &copyPass, &transferBuffer, vertexData)?;
+    let indexBuffer = createBufferWithData(&device, &copyPass, &transferBuffer, vertexIndicies)?;
+    drop(transferBuffer);
+    device.end_copy_pass(copyPass);
+    commandBuffer.submit()?;
 
     let canvasBounds: IntRect = IntRect {
         x1: 0,
@@ -421,7 +524,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         // DRAWING
-        let mut commandBuffer = device.acquire_command_buffer().unwrap();
+        let mut commandBuffer = device.acquire_command_buffer()?;
         let mut swapchainTexture = commandBuffer
             .wait_and_acquire_swapchain_texture(&window)
             .unwrap();
@@ -449,29 +552,49 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             //.with_clear_depth(-1.0)
             //.with_clear_stencil(1)
             ;
+        //renderPass.set_scissor(Rect::new(320, 240, 320, 240));
+        //device.set_viewport(
+        //    &renderPass,
+        //    Viewport::new(
+        //        0.0,
+        //        0.0,
+        //        window.size().0 as f32,
+        //        window.size().1 as f32,
+        //        0.1,
+        //        1.0,
+        //    ),
+        //);
+        //println!("im drawing those primitives");
+        //let myBuffer = [[
+
+        //], []]
+
+        // begin render pass
         let renderPass = device.begin_render_pass(
             &commandBuffer,
             &[targetInfo],
             /*Some(&depthStencilTarget)*/ None,
         )?;
         renderPass.bind_graphics_pipeline(&pipeline);
-        //renderPass.set_scissor(Rect::new(320, 240, 320, 240));
-        device.set_viewport(
-            &renderPass,
-            Viewport::new(
-                0.0,
-                0.0,
-                window.size().0 as f32,
-                window.size().1 as f32,
-                0.1,
-                1.0,
-            ),
+
+        renderPass.bind_vertex_buffers(
+            0,
+            &[BufferBinding::new()
+                .with_buffer(&vertexBuffer)
+                .with_offset(0)],
         );
-        //println!("im drawing those primitives");
-        renderPass.draw_primitives(3, 1, 0, 0);
-        //renderPass.draw_indexed_primitives(3, 1, 0, 0, 0);
+        renderPass.bind_index_buffer(
+            &BufferBinding::new()
+                .with_buffer(&indexBuffer)
+                .with_offset(0),
+            IndexElementSize::_16BIT,
+        );
+        renderPass.draw_indexed_primitives(vertexIndicies.len() as u32, 1, 0, 0, 0);
+        //renderPass.draw_primitives(3, 1, 0, 0);
+        //renderPass.draw_indexed_primitives(6, 1, 0, 0, 0);
 
         device.end_render_pass(renderPass);
+        commandBuffer.submit()?;
 
         //let texInfo = TextureCreateInfo::new()
         //    // sometimes the texture should be smaller because not all of the canvas is on screen
@@ -487,7 +610,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if (needsClear) {}
         if (needsDraw) {}
         // call at the end of every loop
-        let result = commandBuffer.submit();
         let targetFPS = 144;
         sleep(Duration::new(0, 1_000_000_000u32 / targetFPS));
         //sdl3::timer::delay(16);
