@@ -9,31 +9,41 @@
     dead_code
 )]
 
-use std::{os::unix::process::CommandExt, process::Command, thread::sleep, time::Duration};
-// todo change this to use Crate glsl for compiling into spirv
+use std::{
+    fs::File, io::Write, os::unix::process::CommandExt, process::Command, thread::sleep,
+    time::Duration,
+};
 
-fn main() {
-    // glslc -fshader-stage=vertex -o vertex.spv vertex.glsl
-    // glslc -fshader-stage=fragment -o frag.spv frag.glsl
+use shaderc::ShaderKind;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let shadersPath = "src/shaders/".to_string();
-    // this code is quite repetitive, i could change it but it works fine for now i think
-    let _ = Command::new("glslc")
-        .args([
-            "-fshader-stage=vertex",
-            "-o",
-            &(shadersPath.clone().to_owned() + "vertex.spv"),
-            &(shadersPath.clone().to_owned() + "vertex.glsl"),
-        ])
-        .output()
-        .expect("i failed");
-    let _ = Command::new("glslc")
-        .args([
-            "-fshader-stage=fragment",
-            "-o",
-            &(shadersPath.clone().to_owned() + "frag.spv"),
-            &(shadersPath.clone().to_owned() + "frag.glsl"),
-        ])
-        .exec();
-    sleep(Duration::from_secs(10));
-    println!("is this even working???");
+    let vertexShaderFilename = "vertex.glsl";
+    let fragShaderFilename = "frag.glsl";
+
+    let vertexShaderCode: &'static str = include_str!("src/shaders/vertex.glsl");
+    let fragShaderCode: &'static str = include_str!("src/shaders/frag.glsl");
+
+    let compiler: shaderc::Compiler = shaderc::Compiler::new()?;
+    let vertexArtifact = compiler.compile_into_spirv(
+        vertexShaderCode,
+        ShaderKind::Vertex,
+        "vertex.glsl",
+        "main",
+        None,
+    )?;
+    let fragArtifact = compiler.compile_into_spirv(
+        fragShaderCode,
+        ShaderKind::Fragment,
+        "frag.glsl",
+        "main",
+        None,
+    )?;
+    let vertexBinary = vertexArtifact.as_binary_u8();
+    let fragBinary = fragArtifact.as_binary_u8();
+    let mut vertexFile = File::create(shadersPath.clone().to_owned() + "vertex.spv")?;
+    let mut fragFile = File::create(shadersPath.clone().to_owned() + "frag.spv")?;
+    vertexFile.write_all(&vertexBinary);
+    fragFile.write_all(&fragBinary);
+    Ok(())
 }
