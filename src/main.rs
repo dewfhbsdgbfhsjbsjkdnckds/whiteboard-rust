@@ -69,6 +69,11 @@ use std::time::Duration;
 static vertexShaderCode: &'static [u8] = include_bytes!("shaders/vertex.spv");
 static fragShaderCode: &'static [u8] = include_bytes!("shaders/frag.spv");
 
+enum myoption<T> {
+    NotAny,
+    Exists(T),
+}
+
 #[derive(Debug)]
 struct Pixels {
     color: Color,
@@ -108,6 +113,9 @@ impl meow for Point {
             && self.x < square.x2
             && self.y < square.y2;
     }
+}
+fn getWidth(rect: &IntRect) -> u32 {
+    return (rect.x2 - rect.x1) as u32;
 }
 impl IntRect {
     fn shift(&mut self, x: i32, y: i32) {
@@ -200,10 +208,8 @@ fn loadShader(
     storageBufferCount: u32,
     storageTextureCount: u32,
 ) -> Result<Shader, String> {
-    let stage: ShaderStage;
     let entrypoint;
     let shader_format = device.get_shader_formats();
-    if shader_format == ShaderFormat::SPIRV {}
     match shader_format {
         ShaderFormat::SPIRV => entrypoint = c"main",
         _ => return Err("Unrecognised shader format".to_string()),
@@ -303,13 +309,14 @@ fn createBufferWithData<T: Copy + Debug>(
     device: &Device,
     copyPass: &CopyPass,
     transferBuffer: &TransferBuffer,
+    bufferUsageFlags: BufferUsageFlags,
     data: &[T],
 ) -> Result<Buffer, sdl3::Error> {
     let dataSize = size_of_val(data) as u32;
     let buffer = device
         .create_buffer()
         .with_size(dataSize)
-        .with_usage(BufferUsageFlags::VERTEX)
+        .with_usage(bufferUsageFlags)
         .build()?;
 
     let mut bufferMemMap = transferBuffer.map(device, true);
@@ -367,7 +374,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ColorTargetDescriptions: &[sdl3::gpu::ColorTargetDescription] =
         &[sdl3::gpu::ColorTargetDescription::new()
             .with_format(device.get_swapchain_texture_format(&window))];
-    let vertexShader = loadShader(&device, vertexShaderCode, ShaderStage::Vertex, 0, 0, 0, 0)?;
+    // send a matrix as a uniform to transform the rectangle
+    // x1, y1, x2, and y2 would be obtained from dividing the int position by the window size
+    let vertexShader = loadShader(&device, vertexShaderCode, ShaderStage::Vertex, 0, 1, 0, 0)?;
+    // uniform buffer for the colour because i think the colour can change
     let fragShader = loadShader(&device, fragShaderCode, ShaderStage::Fragment, 0, 0, 0, 0)?;
     let pipelineCreateInfo: GraphicsPipelineBuilder = device
         .create_graphics_pipeline()
@@ -387,7 +397,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .with_vertex_buffer_descriptions(&[VertexBufferDescription::new()
                     .with_slot(0)
                     .with_instance_step_rate(0)
-                    .with_pitch(size_of::<f32>() as u32)
+                    // size of 1 vertex i think
+                    .with_pitch(size_of::<f32>() as u32 * 3)
                     .with_input_rate(VertexInputRate::Vertex)]),
         )
         .with_primitive_type(sdl3::gpu::PrimitiveType::TriangleList)
@@ -404,27 +415,49 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // copying vertex data to gpu
     let mut commandBuffer = device.acquire_command_buffer().unwrap();
     let copyPass = device.begin_copy_pass(&commandBuffer)?;
+    //#[rustfmt::skip]
+    //let vertexData: &[f32] = &[
+    //     0.5, 0.5, 0.0,
+    //     0.5, -0.5, 0.0,
+    //    -0.5, -0.5, 0.0,
+    //    -0.5, 0.5, 0.0
+    //];
     #[rustfmt::skip]
     let vertexData: &[f32] = &[
-         0.5, 0.5, 0.0,
-         0.5, -0.5, 0.0,
-        -0.5, -0.5, 0.0,
-        -0.5, 0.5, 0.0
+         1.0,  1.0, 0.0,
+         1.0, -1.0, 0.0,
+        -1.0, -1.0, 0.0,
+        -1.0,  1.0, 0.0
     ];
+
     #[rustfmt::skip]
     let vertexIndicies: &[u16] = &[
         //0, 1, 2
         // must have 3, cant have 1
         //2, 3, 0
-        0, 2, 1
+        //0, 2, 1
+        0, 1, 3,
+        1, 2, 3
     ];
     let transferBuffer = device
         .create_transfer_buffer()
         .with_usage(TransferBufferUsage::UPLOAD)
         .with_size((size_of_val(vertexIndicies) as u32).max(size_of_val(vertexData) as u32))
         .build()?;
-    let vertexBuffer = createBufferWithData(&device, &copyPass, &transferBuffer, vertexData)?;
-    let indexBuffer = createBufferWithData(&device, &copyPass, &transferBuffer, vertexIndicies)?;
+    let vertexBuffer = createBufferWithData(
+        &device,
+        &copyPass,
+        &transferBuffer,
+        BufferUsageFlags::VERTEX,
+        vertexData,
+    )?;
+    let indexBuffer = createBufferWithData(
+        &device,
+        &copyPass,
+        &transferBuffer,
+        BufferUsageFlags::INDEX,
+        vertexIndicies,
+    )?;
     drop(transferBuffer);
     device.end_copy_pass(copyPass);
     commandBuffer.submit()?;
@@ -453,6 +486,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let /*mut*/ currentColor = Color::RGB(255, 255, 255);
     let mut point1: Point;
     let mut point2: Option<Point> = None;
+
+    // uniform buffer data
+    let translateX = 0.0;
+    let translateY = 0.0;
+    // important!!!
+    // 32 bit floats are used (for some reason)
+    #[rustfmt::skip]
+    let mut data: [f32; 16] = [
+        1.0, 0.0, 0.0, 0.0,
+        0.0, 1.0, 0.0, 0.0,
+        0.0, 0.0, 1.0, 0.0,
+        0.0, 0.0, 0.0, 1.0
+    ];
+
     'running: loop {
         let /*mut*/ needsDraw = false;
         let mut needsClear = false;
@@ -523,8 +570,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
+        // i could make a function for this maybe
+        data[0] = whiteboard.canvasBounds.width() as f32 / window.size().0 as f32;
+        data[5] = whiteboard.canvasBounds.height() as f32 / window.size().1 as f32;
+        // need to transform as well, make a number from -1 to 1
+        // whiteboard.canvasBounds.x1 starts at 0
+        // goes up to window.size.0 as it goes to the right
+        //println!("{}", whiteboard.canvasBounds.y1);
+        // canvasBounds.y1 gets larger as it goes down the screen
+        data[3] = 2.0 * whiteboard.canvasBounds.x1 as f32 / window.size().0 as f32;
+        // negative 2 because up is negative / positive in different coordinate systems lmao
+        data[7] = -2.0 * whiteboard.canvasBounds.y1 as f32 / window.size().1 as f32;
+        // colour square using uniform buffer, vec4, so [a, b, c, d] as f32
+        // square colour is just bgcolour
+
         // DRAWING
         let mut commandBuffer = device.acquire_command_buffer()?;
+
         let mut swapchainTexture = commandBuffer
             .wait_and_acquire_swapchain_texture(&window)
             .unwrap();
@@ -589,6 +651,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .with_offset(0),
             IndexElementSize::_16BIT,
         );
+        commandBuffer.push_vertex_uniform_data(0, &data);
         renderPass.draw_indexed_primitives(vertexIndicies.len() as u32, 1, 0, 0, 0);
         //renderPass.draw_primitives(3, 1, 0, 0);
         //renderPass.draw_indexed_primitives(6, 1, 0, 0, 0);
