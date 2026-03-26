@@ -10,6 +10,9 @@
 )]
 //extern crate sdl3;
 
+use sdl3::Error;
+use sdl3::Sdl;
+use sdl3::VideoSubsystem;
 use sdl3::event::Event;
 use sdl3::event::WindowEvent;
 use sdl3::gpu::Buffer;
@@ -43,9 +46,9 @@ use sdl3::gpu::{
     ColorTargetInfo, DepthStencilTargetInfo, StoreOp, TextureCreateInfo, TextureFormat,
     TextureUsage,
 };
+use sdl3::hint::Hint;
 use sdl3::hint::names;
 use sdl3::hint::set_with_priority;
-use sdl3::hint::Hint;
 use sdl3::keyboard::Keycode;
 use sdl3::pixels::Color;
 use sdl3::rect::Point;
@@ -57,9 +60,6 @@ use sdl3::sys::gpu::SDL_GPUColorTargetInfo;
 use sdl3::sys::keycode::SDLK_SPACE;
 use sdl3::sys::video::SDL_WINDOW_RESIZABLE;
 use sdl3::video::Window;
-use sdl3::Error;
-use sdl3::Sdl;
-use sdl3::VideoSubsystem;
 use std::ffi::CStr;
 use std::fmt::Debug;
 use std::ops::Index;
@@ -106,6 +106,44 @@ enum ToolMode {
 trait meow {
     fn isInside(&self, square: &IntRect) -> bool;
 }
+trait ColorThing {
+    fn toF32Arr4(&self) -> [f32; 4];
+}
+
+// i could probably write a macro for this
+trait divide<Rhs, Out> {
+    fn divide(&self, denominator: Rhs) -> Out;
+}
+impl divide<&u8, f32> for u8 {
+    fn divide(&self, denominator: &u8) -> f32 {
+        return *self as f32 / *denominator as f32;
+    }
+}
+impl divide<&u32, f32> for u32 {
+    fn divide(&self, denominator: &u32) -> f32 {
+        return *self as f32 / *denominator as f32;
+    }
+}
+impl divide<&u32, f32> for i32 {
+    fn divide(&self, denominator: &u32) -> f32 {
+        return *self as f32 / *denominator as f32;
+    }
+}
+
+trait myInto<T> {
+    fn into(&self) -> T;
+}
+impl myInto<[f32; 4]> for Color {
+    fn into(&self) -> [f32; 4] {
+        return [
+            self.r.divide(&u8::MAX),
+            self.g.divide(&u8::MAX),
+            self.b.divide(&u8::MAX),
+            self.a.divide(&u8::MAX),
+        ];
+    }
+}
+
 impl meow for Point {
     fn isInside(&self, square: &IntRect) -> bool {
         return self.x >= square.x1
@@ -351,9 +389,9 @@ fn createBufferWithData<T: Copy + Debug>(
 // change brush colour
 // add inserting text
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    set_with_priority(names::VIDEO_DRIVER, "wayland", &Hint::Override);
-    let sdl_context: Sdl = sdl3::init().unwrap();
-    let video_subsystem: VideoSubsystem = sdl_context.video().unwrap();
+    //set_with_priority(names::VIDEO_DRIVER, "wayland", &Hint::Override);
+    let sdl_context: Sdl = sdl3::init()?;
+    let video_subsystem: VideoSubsystem = sdl_context.video()?;
 
     const width: u32 = 900;
     const height: u32 = 500;
@@ -361,14 +399,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .window("window", width, height)
         .set_window_flags(SDL_WINDOW_RESIZABLE as u32) // casting? still works?
         .position_centered()
-        .build()
-        .unwrap();
+        .build()?;
+
+    let canvasBounds: IntRect = IntRect {
+        x1: 0,
+        y1: 0,
+        x2: width as i32,
+        y2: height as i32,
+    };
+    let mut whiteboard = Whiteboard {
+        canvasBounds,
+        //canvas,
+        pixels: Vec::with_capacity(10_000),
+        bgcolor: Color::RGB(80, 80, 80),
+    };
+    let mut toolMode = ToolMode::pencil;
+    let mut oldTool = ToolMode::none;
 
     // needs shader format, such as SPIRV, MSL, etc
-    let device = Device::new(sdl3::gpu::ShaderFormat::SPIRV, true)
-        .unwrap()
-        .with_window(&window)
-        .unwrap();
+    let device = Device::new(sdl3::gpu::ShaderFormat::SPIRV | ShaderFormat::DXIL, true)?
+        .with_window(&window)?;
 
     //println!("{:?}", vertexShaderCode);
     let ColorTargetDescriptions: &[sdl3::gpu::ColorTargetDescription] =
@@ -378,7 +428,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // x1, y1, x2, and y2 would be obtained from dividing the int position by the window size
     let vertexShader = loadShader(&device, vertexShaderCode, ShaderStage::Vertex, 0, 1, 0, 0)?;
     // uniform buffer for the colour because i think the colour can change
-    let fragShader = loadShader(&device, fragShaderCode, ShaderStage::Fragment, 0, 0, 0, 0)?;
+    let fragShader = loadShader(&device, fragShaderCode, ShaderStage::Fragment, 0, 1, 0, 0)?;
     let pipelineCreateInfo: GraphicsPipelineBuilder = device
         .create_graphics_pipeline()
         .with_vertex_shader(&vertexShader)
@@ -461,21 +511,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     drop(transferBuffer);
     device.end_copy_pass(copyPass);
     commandBuffer.submit()?;
-
-    let canvasBounds: IntRect = IntRect {
-        x1: 0,
-        y1: 0,
-        x2: width as i32,
-        y2: height as i32,
-    };
-    let mut whiteboard = Whiteboard {
-        canvasBounds,
-        //canvas,
-        pixels: Vec::with_capacity(10_000),
-        bgcolor: Color::RGB(40, 40, 40),
-    };
-    let mut toolMode = ToolMode::pencil;
-    let mut oldTool = ToolMode::none;
 
     //whiteboard.canvas.set_draw_color(Color::RGB(0, 0, 0));
     //whiteboard.canvas.clear();
@@ -570,19 +605,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        // i could make a function for this maybe
-        data[0] = whiteboard.canvasBounds.width() as f32 / window.size().0 as f32;
-        data[5] = whiteboard.canvasBounds.height() as f32 / window.size().1 as f32;
-        // need to transform as well, make a number from -1 to 1
-        // whiteboard.canvasBounds.x1 starts at 0
-        // goes up to window.size.0 as it goes to the right
-        //println!("{}", whiteboard.canvasBounds.y1);
+        data[0] = whiteboard.canvasBounds.width().divide(&window.size().0);
+        data[5] = whiteboard.canvasBounds.height().divide(&window.size().1);
         // canvasBounds.y1 gets larger as it goes down the screen
-        data[3] = 2.0 * whiteboard.canvasBounds.x1 as f32 / window.size().0 as f32;
+        data[3] = 2.0 * whiteboard.canvasBounds.x1.divide(&window.size().0);
         // negative 2 because up is negative / positive in different coordinate systems lmao
-        data[7] = -2.0 * whiteboard.canvasBounds.y1 as f32 / window.size().1 as f32;
-        // colour square using uniform buffer, vec4, so [a, b, c, d] as f32
-        // square colour is just bgcolour
+        data[7] = -2.0 * whiteboard.canvasBounds.y1.divide(&window.size().1);
 
         // DRAWING
         let mut commandBuffer = device.acquire_command_buffer()?;
@@ -592,7 +620,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap();
         let targetInfo: ColorTargetInfo = ColorTargetInfo::default()
             .with_texture(&swapchainTexture)
-            .with_clear_color(whiteboard.bgcolor)
+            .with_clear_color(Color::BLACK)
             .with_load_op(LoadOp::CLEAR)
             .with_store_op(StoreOp::STORE);
         let textureCreateInfo = TextureCreateInfo::new()
@@ -652,6 +680,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             IndexElementSize::_16BIT,
         );
         commandBuffer.push_vertex_uniform_data(0, &data);
+        // idk if i need to push this every frame
+        // perhaps i can make a condition to only push when this is update
+        // first number should be the same as the binding i think
+        commandBuffer.push_fragment_uniform_data(0, &myInto::into(&whiteboard.bgcolor));
+        //let fragData: f32 = 0.2;
+        //commandBuffer.push_fragment_uniform_data(0, &fragData);
         renderPass.draw_indexed_primitives(vertexIndicies.len() as u32, 1, 0, 0, 0);
         //renderPass.draw_primitives(3, 1, 0, 0);
         //renderPass.draw_indexed_primitives(6, 1, 0, 0, 0);
