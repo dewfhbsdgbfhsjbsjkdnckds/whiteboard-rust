@@ -69,18 +69,12 @@ use std::time::Duration;
 static vertexShaderCode: &'static [u8] = include_bytes!("shaders/vertex.spv");
 static fragShaderCode: &'static [u8] = include_bytes!("shaders/frag.spv");
 
-enum myoption<T> {
-    NotAny,
-    Exists(T),
-}
-
 #[derive(Debug)]
 struct Pixels {
     color: Color,
     points: Vec<Point>,
 }
 
-// maybe just rename this to square or something idk
 struct IntRect {
     x1: i32,
     y1: i32,
@@ -90,7 +84,6 @@ struct IntRect {
 
 struct Whiteboard {
     canvasBounds: IntRect,
-    //canvas: Canvas<Window>,
     pixels: Vec<Pixels>,
     bgcolor: Color,
 }
@@ -105,9 +98,6 @@ enum ToolMode {
 
 trait meow {
     fn isInside(&self, square: &IntRect) -> bool;
-}
-trait ColorThing {
-    fn toF32Arr4(&self) -> [f32; 4];
 }
 
 // i could probably write a macro for this
@@ -268,6 +258,7 @@ fn loadShader(
     }
 }
 
+// todo go over and clean up code like this later
 fn mouseMovement(
     whiteboard: &mut Whiteboard,
     point1: Point,
@@ -365,7 +356,8 @@ fn createBufferWithData<T: Copy + Debug>(
     for (index, &value) in data.iter().enumerate() {
         map[index] = value;
     }
-    println!("{:?}", map);
+    // todo clone from slice should work, and it might be faster as well
+    //println!("{:?}", map);
     bufferMemMap.unmap();
 
     copyPass.upload_to_gpu_buffer(
@@ -397,6 +389,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     const height: u32 = 500;
     let window = video_subsystem
         .window("window", width, height)
+        // todo find the rust version of this flag
         .set_window_flags(SDL_WINDOW_RESIZABLE as u32) // casting? still works?
         .position_centered()
         .build()?;
@@ -465,13 +458,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // copying vertex data to gpu
     let mut commandBuffer = device.acquire_command_buffer().unwrap();
     let copyPass = device.begin_copy_pass(&commandBuffer)?;
-    //#[rustfmt::skip]
-    //let vertexData: &[f32] = &[
-    //     0.5, 0.5, 0.0,
-    //     0.5, -0.5, 0.0,
-    //    -0.5, -0.5, 0.0,
-    //    -0.5, 0.5, 0.0
-    //];
     #[rustfmt::skip]
     let vertexData: &[f32] = &[
          1.0,  1.0, 0.0,
@@ -482,10 +468,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     #[rustfmt::skip]
     let vertexIndicies: &[u16] = &[
-        //0, 1, 2
-        // must have 3, cant have 1
-        //2, 3, 0
-        //0, 2, 1
         0, 1, 3,
         1, 2, 3
     ];
@@ -511,10 +493,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     drop(transferBuffer);
     device.end_copy_pass(copyPass);
     commandBuffer.submit()?;
-
-    //whiteboard.canvas.set_draw_color(Color::RGB(0, 0, 0));
-    //whiteboard.canvas.clear();
-    //whiteboard.canvas.present();
 
     let mut mouseHeldDown = false;
     let mut event_pump = sdl_context.event_pump().unwrap();
