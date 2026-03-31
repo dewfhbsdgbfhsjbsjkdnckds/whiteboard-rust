@@ -10,7 +10,7 @@
 )]
 //extern crate sdl3;
 
-use sdl3::Error;
+//use sdl3::Error;
 use sdl3::Sdl;
 use sdl3::VideoSubsystem;
 use sdl3::event::Event;
@@ -24,15 +24,25 @@ use sdl3::gpu::CopyPass;
 use sdl3::gpu::CullMode;
 use sdl3::gpu::Device;
 use sdl3::gpu::FillMode;
+use sdl3::gpu::Filter;
 use sdl3::gpu::GraphicsPipeline;
 use sdl3::gpu::GraphicsPipelineBuilder;
 use sdl3::gpu::GraphicsPipelineTargetInfo;
 use sdl3::gpu::IndexElementSize;
 use sdl3::gpu::LoadOp;
 use sdl3::gpu::RasterizerState;
+use sdl3::gpu::SampleCount;
+use sdl3::gpu::SamplerAddressMode;
+use sdl3::gpu::SamplerCreateInfo;
+use sdl3::gpu::SamplerMipmapMode;
 use sdl3::gpu::Shader;
 use sdl3::gpu::ShaderFormat;
 use sdl3::gpu::ShaderStage;
+use sdl3::gpu::Texture;
+use sdl3::gpu::TextureRegion;
+use sdl3::gpu::TextureSamplerBinding;
+use sdl3::gpu::TextureTransferInfo;
+use sdl3::gpu::TextureType;
 use sdl3::gpu::TransferBuffer;
 use sdl3::gpu::TransferBufferLocation;
 use sdl3::gpu::TransferBufferUsage;
@@ -51,6 +61,7 @@ use sdl3::hint::names;
 use sdl3::hint::set_with_priority;
 use sdl3::keyboard::Keycode;
 use sdl3::pixels::Color;
+use sdl3::pixels::PixelFormat;
 use sdl3::rect::Point;
 use sdl3::rect::Rect;
 use sdl3::render::Canvas;
@@ -60,6 +71,7 @@ use sdl3::sys::gpu::SDL_GPUColorTargetInfo;
 use sdl3::sys::keycode::SDLK_SPACE;
 use sdl3::sys::video::SDL_WINDOW_RESIZABLE;
 use sdl3::video::Window;
+use std::error::Error;
 use std::ffi::CStr;
 use std::fmt::Debug;
 use std::ops::Index;
@@ -82,10 +94,21 @@ struct IntRect {
     y2: i32,
 }
 
+#[repr(packed)]
+#[derive(Clone, Copy)]
+struct Vertex {
+    x: f32,
+    y: f32,
+    z: f32,
+    u: f32,
+    v: f32,
+}
+
 struct Whiteboard {
     canvasBounds: IntRect,
     pixels: Vec<Pixels>,
     bgcolor: Color,
+    data: Vec<u8>,
 }
 
 #[derive(PartialEq, Clone, Copy, Debug)]
@@ -98,6 +121,14 @@ enum ToolMode {
 
 trait meow {
     fn isInside(&self, square: &IntRect) -> bool;
+}
+trait DebugPrint {
+    fn debugPrint(&self);
+}
+impl<T: Debug> DebugPrint for T {
+    fn debugPrint(&self) {
+        println!("{:?}", self);
+    }
 }
 
 // i could probably write a macro for this
@@ -114,11 +145,22 @@ impl divide<&u32, f32> for u32 {
         return *self as f32 / *denominator as f32;
     }
 }
+impl divide<i32, f32> for u32 {
+    fn divide(&self, denominator: i32) -> f32 {
+        return *self as f32 / denominator as f32;
+    }
+}
 impl divide<&u32, f32> for i32 {
     fn divide(&self, denominator: &u32) -> f32 {
         return *self as f32 / *denominator as f32;
     }
 }
+impl divide<&i32, f32> for i32 {
+    fn divide(&self, denominator: &i32) -> f32 {
+        return *self as f32 / *denominator as f32;
+    }
+}
+
 
 trait myInto<T> {
     fn into(&self) -> T;
@@ -236,6 +278,7 @@ fn loadShader(
     storageBufferCount: u32,
     storageTextureCount: u32,
 ) -> Result<Shader, String> {
+    // todo i dont really need this function since im just doing "include bytes"
     let entrypoint;
     let shader_format = device.get_shader_formats();
     match shader_format {
@@ -256,6 +299,33 @@ fn loadShader(
     } else {
         return Err("shader failed to build".to_string());
     }
+}
+
+fn writeToTexture<T: Copy>(
+    device: &Device,
+    copyPass: &CopyPass,
+    data: &[T],
+    texture: &Texture,
+    transferBuffer: &TransferBuffer
+) -> Result<(), sdl3::Error> {
+
+    let mut bufferMem = transferBuffer.map(device, false);
+    // copy from slice is laggy. Instead i should make a function to only push changes
+    bufferMem.mem_mut().copy_from_slice(data);
+    bufferMem.unmap();
+
+    copyPass.upload_to_gpu_texture(
+        TextureTransferInfo::new()
+            .with_transfer_buffer(transferBuffer)
+            .with_offset(0),
+        TextureRegion::new()
+            .with_texture(&texture)
+            .with_width(texture.width())
+            .with_height(texture.height())
+            .with_depth(1),
+        false,
+    );
+    return Ok(());
 }
 
 // todo go over and clean up code like this later
@@ -280,30 +350,22 @@ fn mouseMovement(
                 if (!point.isInside(&whiteboard.canvasBounds)) {
                     continue;
                 }
-                let mut pointDrawn = false;
-                // i should check for duplicates here
-                for pixels in &mut whiteboard.pixels {
-                    if (pixels.color == color) {
-                        pixels.points.push(Point::new(
-                            point.x - whiteboard.canvasBounds.x1,
-                            point.y - whiteboard.canvasBounds.y1,
-                        ));
-                        pointDrawn = true;
-                        break;
-                    }
+                let normalX = (point.x - whiteboard.canvasBounds.x1) as usize;
+                let normalY = (point.y - whiteboard.canvasBounds.y1) as usize;
+                // i think canvas X and Y are the issue
+                let index = (normalX + (normalY * whiteboard.canvasBounds.width() as usize)) * 4;
+                if let Some(element) = whiteboard.data.get_mut(index) {
+                    *element = color.r;
                 }
-                if (!pointDrawn) {
-                    let pixels = Pixels {
-                        points: vec![Point::new(
-                            point.x - whiteboard.canvasBounds.x1,
-                            point.y - whiteboard.canvasBounds.y1,
-                        )],
-                        color,
-                    };
-                    whiteboard.pixels.push(pixels);
+                if let Some(element) = whiteboard.data.get_mut(index + 1) {
+                    *element = color.g;
                 }
-                //whiteboard.canvas.set_draw_color(color);
-                //let result = whiteboard.canvas.draw_point(point);
+                if let Some(element) = whiteboard.data.get_mut(index + 2) {
+                    *element = color.b;
+                }
+                if let Some(element) = whiteboard.data.get_mut(index + 3) {
+                    *element = color.a;
+                }
             }
         }
         ToolMode::eraser => {
@@ -314,27 +376,42 @@ fn mouseMovement(
                 if (!eraserPoint.isInside(&whiteboard.canvasBounds)) {
                     continue;
                 };
-                //let mut pixelErased = false;
-                'inner: for pixels in &mut whiteboard.pixels {
-                    for i in 0..pixels.points.len() {
-                        if (pixels.points.get(i).is_some()) {
-                            let point = pixels.points.get(i).unwrap();
-                            if (eraserPoint == *point) {
-                                // swap remove is faster and i dont need order
-                                pixels.points.swap_remove(i);
-                                //whiteboard.canvas.set_draw_color(color);
-                                //let result = whiteboard.canvas.draw_point(eraserPoint);
-                                break 'inner;
-                            }
-                        }
-                    }
+                let normalX = (eraserPoint.x - whiteboard.canvasBounds.x1) as usize;
+                let normalY = (eraserPoint.y - whiteboard.canvasBounds.y1) as usize;
+                let index = (normalX + (normalY * whiteboard.canvasBounds.width() as usize)) * 4;
+                if let Some(element) = whiteboard.data.get_mut(index) {
+                    *element = whiteboard.bgcolor.r;
                 }
+                if let Some(element) = whiteboard.data.get_mut(index + 1) {
+                    *element = whiteboard.bgcolor.g;
+                }
+                if let Some(element) = whiteboard.data.get_mut(index + 2) {
+                    *element = whiteboard.bgcolor.b;
+                }
+                if let Some(element) = whiteboard.data.get_mut(index + 3) {
+                    *element = whiteboard.bgcolor.a;
+                }
+                //let mut pixelErased = false;
+                //'inner: for pixels in &mut whiteboard.pixels {
+                //    for i in 0..pixels.points.len() {
+                //        if (pixels.points.get(i).is_some()) {
+                //            let point = pixels.points.get(i).unwrap();
+                //            if (eraserPoint == *point) {
+                //                // swap remove is faster and i dont need order
+                //                //pixels.points.swap_remove(i);
+                //                //whiteboard.canvas.set_draw_color(color);
+                //                //let result = whiteboard.canvas.draw_point(eraserPoint);
+
+                //                break 'inner;
+                //            }
+                //        }
+                //    }
             }
         }
     }
 }
 
-fn createBufferWithData<T: Copy + Debug>(
+fn createBufferWithData<T: Copy>(
     device: &Device,
     copyPass: &CopyPass,
     transferBuffer: &TransferBuffer,
@@ -380,7 +457,7 @@ fn createBufferWithData<T: Copy + Debug>(
 // different brush sizes
 // change brush colour
 // add inserting text
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn Error>> {
     //set_with_priority(names::VIDEO_DRIVER, "wayland", &Hint::Override);
     let sdl_context: Sdl = sdl3::init()?;
     let video_subsystem: VideoSubsystem = sdl_context.video()?;
@@ -400,11 +477,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         x2: width as i32,
         y2: height as i32,
     };
+
+    let bgcolor = Color::RGB(80, 80, 80);
+    let mut data: Vec<u8> =
+        Vec::with_capacity(canvasBounds.width() as usize * canvasBounds.height() as usize * 4);
+    for _ in 0..(canvasBounds.width() * canvasBounds.height()) {
+        data.push(bgcolor.r);
+        data.push(bgcolor.g);
+        data.push(bgcolor.b);
+        data.push(bgcolor.a);
+    }
     let mut whiteboard = Whiteboard {
         canvasBounds,
         //canvas,
         pixels: Vec::with_capacity(10_000),
-        bgcolor: Color::RGB(80, 80, 80),
+        bgcolor: bgcolor,
+        data: data,
     };
     let mut toolMode = ToolMode::pencil;
     let mut oldTool = ToolMode::none;
@@ -421,8 +509,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // x1, y1, x2, and y2 would be obtained from dividing the int position by the window size
     let vertexShader = loadShader(&device, vertexShaderCode, ShaderStage::Vertex, 0, 1, 0, 0)?;
     // uniform buffer for the colour because i think the colour can change
-    let fragShader = loadShader(&device, fragShaderCode, ShaderStage::Fragment, 0, 1, 0, 0)?;
-    let pipelineCreateInfo: GraphicsPipelineBuilder = device
+    let fragShader = loadShader(&device, fragShaderCode, ShaderStage::Fragment, 1, 1, 0, 0)?;
+    let pipeline = device
         .create_graphics_pipeline()
         .with_vertex_shader(&vertexShader)
         .with_fragment_shader(&fragShader)
@@ -432,17 +520,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .with_vertex_input_state(
             VertexInputState::new()
-                .with_vertex_attributes(&[VertexAttribute::new()
-                    .with_format(VertexElementFormat::Float3)
-                    .with_buffer_slot(0)
-                    .with_location(0)
-                    .with_offset(0)])
                 .with_vertex_buffer_descriptions(&[VertexBufferDescription::new()
                     .with_slot(0)
                     .with_instance_step_rate(0)
-                    // size of 1 vertex i think
-                    .with_pitch(size_of::<f32>() as u32 * 3)
-                    .with_input_rate(VertexInputRate::Vertex)]),
+                    .with_pitch(size_of::<Vertex>() as u32)
+                    .with_input_rate(VertexInputRate::Vertex)])
+                .with_vertex_attributes(&[
+                    VertexAttribute::new()
+                        .with_format(VertexElementFormat::Float3)
+                        .with_buffer_slot(0)
+                        .with_location(0)
+                        .with_offset(0),
+                    VertexAttribute::new()
+                        .with_format(VertexElementFormat::Float2)
+                        .with_location(1)
+                        .with_buffer_slot(0)
+                        .with_offset((size_of::<f32>() * 3) as u32),
+                ]),
         )
         .with_primitive_type(sdl3::gpu::PrimitiveType::TriangleList)
         .with_fill_mode(FillMode::Fill)
@@ -450,27 +544,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             RasterizerState::new()
                 .with_fill_mode(FillMode::Fill)
                 .with_cull_mode(CullMode::None),
-        );
-    let pipeline: GraphicsPipeline = pipelineCreateInfo.build()?;
+        ).build()?;
     drop(vertexShader);
     drop(fragShader);
 
     // copying vertex data to gpu
-    let mut commandBuffer = device.acquire_command_buffer().unwrap();
+    let mut commandBuffer = device.acquire_command_buffer()?;
     let copyPass = device.begin_copy_pass(&commandBuffer)?;
     #[rustfmt::skip]
-    let vertexData: &[f32] = &[
-         1.0,  1.0, 0.0,
-         1.0, -1.0, 0.0,
-        -1.0, -1.0, 0.0,
-        -1.0,  1.0, 0.0
-    ];
+        let vertexData: &[Vertex] = &[
+            Vertex {x:  1.0, y:  1.0, z: 0.0, u: 1.0, v: 0.0},
+            Vertex {x:  1.0, y: -1.0, z: 0.0, u: 1.0, v: 1.0},
+            Vertex {x: -1.0, y: -1.0, z: 0.0, u: 0.0, v: 1.0},
+            Vertex {x: -1.0, y:  1.0, z: 0.0, u: 0.0, v: 0.0}
+        ];
 
     #[rustfmt::skip]
-    let vertexIndicies: &[u16] = &[
-        0, 1, 3,
-        1, 2, 3
-    ];
+        let vertexIndicies: &[u16] = &[
+            0, 1, 3,
+            1, 2, 3
+        ];
     let transferBuffer = device
         .create_transfer_buffer()
         .with_usage(TransferBufferUsage::UPLOAD)
@@ -506,16 +599,51 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // important!!!
     // 32 bit floats are used (for some reason)
     #[rustfmt::skip]
-    let mut data: [f32; 16] = [
-        1.0, 0.0, 0.0, 0.0,
-        0.0, 1.0, 0.0, 0.0,
-        0.0, 0.0, 1.0, 0.0,
-        0.0, 0.0, 0.0, 1.0
-    ];
+        let mut data: [f32; 16] = [
+            1.0, 0.0, 0.0, 0.0,
+            0.0, 1.0, 0.0, 0.0,
+            0.0, 0.0, 1.0, 0.0,
+            0.0, 0.0, 0.0, 1.0
+        ];
+
+    let mut pixelsTexture = device.create_texture(
+        TextureCreateInfo::new()
+            .with_num_levels(1)
+            .with_layer_count_or_depth(1)
+            .with_usage(TextureUsage::SAMPLER)
+            .with_format(TextureFormat::R8g8b8a8Unorm)
+            .with_width(whiteboard.canvasBounds.width())
+            .with_height(whiteboard.canvasBounds.height())
+            .with_type(TextureType::_2D)
+            .with_sample_count(SampleCount::NoMultiSampling),
+    )?;
+    let pixelsTextureTransferBuffer = device.create_transfer_buffer()
+        .with_usage(TransferBufferUsage::UPLOAD)
+        .with_size(whiteboard.data.len() as u32)
+        .build()?;
+
+    {
+        let mut commandBuffer = device.acquire_command_buffer()?;
+        let copyPass = device.begin_copy_pass(&commandBuffer)?;
+        writeToTexture(&device, &copyPass, whiteboard.data.as_slice(), &pixelsTexture, &pixelsTextureTransferBuffer);
+        device.end_copy_pass(copyPass);
+        commandBuffer.submit()?;
+    }
+
+    let pixelsTextureSampler = device.create_sampler(
+        SamplerCreateInfo::new()
+            .with_min_filter(Filter::Nearest)
+            .with_mag_filter(Filter::Nearest)
+            .with_mipmap_mode(SamplerMipmapMode::Nearest)
+            .with_address_mode_u(SamplerAddressMode::ClampToEdge)
+            .with_address_mode_v(SamplerAddressMode::ClampToEdge)
+            .with_address_mode_w(SamplerAddressMode::ClampToEdge),
+    )?;
 
     'running: loop {
-        let /*mut*/ needsDraw = false;
+        let mut needsDraw = false;
         let mut needsClear = false;
+        let mut canvasMoved = false;
         for event in event_pump.poll_iter() {
             match event {
                 Event::Quit { .. }
@@ -544,10 +672,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 } => {
                     toolMode = ToolMode::pencil;
                 }
+                // resizing fucks with canvasBounds for some reason
                 Event::Window {
                     win_event: WindowEvent::Resized(x, y),
                     ..
-                } => {}
+                } => {
+                    //assert_eq!(x as u32, window.size().0);
+                    //todo make old size var to make (the middle of) the whiteboard stay in the same position
+                    let widthMeow = whiteboard.canvasBounds.width();
+                    let heightMeow = whiteboard.canvasBounds.height();
+                    whiteboard.canvasBounds.x1 = 0;
+                    whiteboard.canvasBounds.y1 = 0;
+                    whiteboard.canvasBounds.x2 = widthMeow as i32;
+                    whiteboard.canvasBounds.y2 = heightMeow as i32;
+                    // i love rust fmt
+                    data[3] = ((whiteboard.canvasBounds.x1 as f32
+                        + whiteboard.canvasBounds.width().divide(2))
+                        / window.size().0 as f32)
+                        * 2.0
+                        - 1.0;
+                    data[7] = -(((whiteboard.canvasBounds.y1 as f32
+                        + whiteboard.canvasBounds.height().divide(2))
+                        / window.size().1 as f32)
+                        * 2.0
+                        - 1.0);
+                }
                 Event::KeyDown {
                     keycode: Some(Keycode::Space),
                     ..
@@ -566,8 +715,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Event::MouseMotion { x, y, .. } => {
                     point1 = Point::new(x as i32, y as i32);
                     if (mouseHeldDown && point2.is_some()) {
-                        if (toolMode == ToolMode::movingCanvas) {
-                            needsClear = true;
+                        //if (toolMode == ToolMode::movingCanvas) {
+                        //    needsClear = true;
+                        //}
+                        if (toolMode == ToolMode::pencil || toolMode == ToolMode::eraser) {
+                            needsDraw = true;
+                        } else if (toolMode == ToolMode::movingCanvas) {
+                            canvasMoved = true;
                         }
                         mouseMovement(
                             &mut whiteboard,
@@ -585,10 +739,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         data[0] = whiteboard.canvasBounds.width().divide(&window.size().0);
         data[5] = whiteboard.canvasBounds.height().divide(&window.size().1);
-        // canvasBounds.y1 gets larger as it goes down the screen
-        data[3] = 2.0 * whiteboard.canvasBounds.x1.divide(&window.size().0);
-        // negative 2 because up is negative / positive in different coordinate systems lmao
-        data[7] = -2.0 * whiteboard.canvasBounds.y1.divide(&window.size().1);
+        if canvasMoved {
+            data[3] = ((whiteboard.canvasBounds.x1 as f32
+                + whiteboard.canvasBounds.width().divide(2))
+                / window.size().0 as f32)
+                * 2.0
+                - 1.0;
+            data[7] = -(((whiteboard.canvasBounds.y1 as f32
+                + whiteboard.canvasBounds.height().divide(2))
+                / window.size().1 as f32)
+                * 2.0
+                - 1.0);
+        }
+
+        // copy pixels to texture
+        if (needsDraw) {
+            let commandBuffer = device.acquire_command_buffer()?;
+            let copyPass = device.begin_copy_pass(&commandBuffer)?;
+            writeToTexture(&device, &copyPass, whiteboard.data.as_slice(), &pixelsTexture, &pixelsTextureTransferBuffer);
+            device.end_copy_pass(copyPass);
+            commandBuffer.submit()?;
+        }
 
         // DRAWING
         let mut commandBuffer = device.acquire_command_buffer()?;
@@ -601,41 +772,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .with_clear_color(Color::BLACK)
             .with_load_op(LoadOp::CLEAR)
             .with_store_op(StoreOp::STORE);
-        let textureCreateInfo = TextureCreateInfo::new()
-            // the texture should be the same width and height as the render target
-            .with_width(window.size().0)
-            .with_height(window.size().1)
-            .with_layer_count_or_depth(1)
-            .with_num_levels(1)
-            .with_usage(TextureUsage::DEPTH_STENCIL_TARGET)
-            // 24 bits for depth, 8 bits for stencil
-            .with_format(TextureFormat::D24UnormS8Uint);
-        let mut depthStencilTexture: sdl3::gpu::Texture =
-            device.create_texture(textureCreateInfo).unwrap();
-        let depthStencilTarget = DepthStencilTargetInfo::new()
-            .with_texture(&mut depthStencilTexture)
-            //.with_cycle(true)
-            //.with_stencil_load_op(LoadOp::CLEAR)
-            //.with_stencil_store_op(StoreOp::STORE)
-            //.with_clear_depth(-1.0)
-            //.with_clear_stencil(1)
-            ;
-        //renderPass.set_scissor(Rect::new(320, 240, 320, 240));
-        //device.set_viewport(
-        //    &renderPass,
-        //    Viewport::new(
-        //        0.0,
-        //        0.0,
-        //        window.size().0 as f32,
-        //        window.size().1 as f32,
-        //        0.1,
-        //        1.0,
-        //    ),
-        //);
-        //println!("im drawing those primitives");
-        //let myBuffer = [[
-
-        //], []]
 
         // begin render pass
         let renderPass = device.begin_render_pass(
@@ -657,13 +793,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .with_offset(0),
             IndexElementSize::_16BIT,
         );
-        commandBuffer.push_vertex_uniform_data(0, &data);
-        // idk if i need to push this every frame
-        // perhaps i can make a condition to only push when this is update
+        renderPass.bind_fragment_samplers(
+            0,
+            &[TextureSamplerBinding::new()
+                .with_texture(&pixelsTexture)
+                .with_sampler(&pixelsTextureSampler)],
+        );
         // first number should be the same as the binding i think
+        commandBuffer.push_vertex_uniform_data(0, &data);
         commandBuffer.push_fragment_uniform_data(0, &myInto::into(&whiteboard.bgcolor));
-        //let fragData: f32 = 0.2;
-        //commandBuffer.push_fragment_uniform_data(0, &fragData);
         renderPass.draw_indexed_primitives(vertexIndicies.len() as u32, 1, 0, 0, 0);
         //renderPass.draw_primitives(3, 1, 0, 0);
         //renderPass.draw_indexed_primitives(6, 1, 0, 0, 0);
@@ -684,6 +822,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // color is rgba, 8 bits each, 32 bits in total, u32
         if (needsClear) {}
         if (needsDraw) {}
+        //whiteboard.pixels.debugPrint();
+
         // call at the end of every loop
         let targetFPS = 144;
         sleep(Duration::new(0, 1_000_000_000u32 / targetFPS));
