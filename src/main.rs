@@ -82,9 +82,34 @@ static vertexShaderCode: &'static [u8] = include_bytes!("shaders/vertex.spv");
 static fragShaderCode: &'static [u8] = include_bytes!("shaders/frag.spv");
 
 #[derive(Debug)]
+struct UPoint {
+    x: u32,
+    y: u32,
+}
+
+impl UPoint {
+    fn new(x: u32, y: u32) -> UPoint {
+        return UPoint { x, y };
+    }
+}
+
+//i should make this myself
+//#[derive(new)]
+#[derive(Debug)]
+struct Pixel {
+    color: Color,
+    point: UPoint,
+}
+
 struct Pixels {
     color: Color,
-    points: Vec<Point>,
+    points: Vec<UPoint>,
+}
+
+impl Pixel {
+    fn new(color: Color, point: UPoint) -> Pixel {
+        return Pixel { color, point };
+    }
 }
 
 struct IntRect {
@@ -104,11 +129,26 @@ struct Vertex {
     v: f32,
 }
 
+#[derive(Debug)]
+enum Change {
+    pencil { old: Vec<Pixel>, new: Vec<Pixel> },
+    // obviously, new is RGBA 0 0 0 0
+    eraser { old: Vec<Pixel> },
+}
+
+// Changes need to be undone, and redone
+// For pencil, i need to store the position and color of each pixel
+// same for eraser
+// i need to be able to just call whiteboard.changes.undo()
+// and whiteboard.changes.redo()
+
 struct Whiteboard {
     canvasBounds: IntRect,
-    pixels: Vec<Pixels>,
     bgcolor: Color,
     data: Vec<u8>,
+    changes: Vec<Change>,
+    // starts at 0
+    changesIndex: usize,
 }
 
 #[derive(PartialEq, Clone, Copy, Debug)]
@@ -117,6 +157,91 @@ enum ToolMode {
     pencil,
     eraser,
     movingCanvas,
+}
+
+//trait undo {
+//}
+trait Undo {
+    fn undo(&mut self, textureMem: &mut [u8]);
+    fn redo(&mut self, textureMem: &mut [u8]);
+}
+
+impl Undo for Whiteboard {
+    fn undo(&mut self, textureMem: &mut [u8]) {
+        // if index is 0, there are no changes
+        if self.changesIndex != 0 && let Some(change) = self.changes.get(self.changesIndex - 1) {
+            self.changesIndex -= 1;
+            match change {
+                Change::pencil { old, new } => {
+                    for pixel in old {
+                        // i should make this a function or something lol, for index
+                        let index: usize = (pixel.point.x as usize
+                            + pixel.point.y as usize * self.canvasBounds.width() as usize) * 4;
+                        setColorAtIndex(index, textureMem, &pixel.color);
+                        setColorAtIndex(index, &mut self.data, &pixel.color);
+                    }
+                    //textureMem.debugPrint();
+                    for i in (0..self.canvasBounds.width()*self.canvasBounds.height()) {
+                        let index = i as usize * 4;
+                        let color = getColorAtIndex(index, self);
+                        if let Some(color) = color {
+                            if color.r == 255 {
+                                println!("FUCK THIS IS BAD");
+                            }
+                        }
+                    }
+                }
+                Change::eraser { old } => {
+                    // restore old colors of everything
+                    for pixel in old {
+                        let index: usize = (pixel.point.x as usize
+                            + pixel.point.y as usize * self.canvasBounds.width() as usize) * 4;
+                        setColorAtIndex(index, textureMem, &pixel.color);
+                        setColorAtIndex(index, &mut self.data, &pixel.color);
+                    }
+                }
+            }
+        }
+    }
+    fn redo(&mut self, textureMem: &mut [u8]) {
+        if let Some(change) = self.changes.get(self.changesIndex) {
+            match change {
+                Change::pencil { new, .. } => {
+                    for pixel in new {
+                        let index: usize = (pixel.point.x as usize
+                            + pixel.point.y as usize * self.canvasBounds.width() as usize) * 4;
+                        setColorAtIndex(index, textureMem, &pixel.color);
+                        setColorAtIndex(index, &mut self.data, &pixel.color);
+                    }
+                }
+                // redoing will just set all of them back to 0 0 0 0
+                Change::eraser { old } => {
+                    for pixel in old {
+                        let index: usize = (pixel.point.x as usize
+                            + pixel.point.y as usize * self.canvasBounds.width() as usize) * 4;
+                        let color = Color::RGBA(0, 0, 0, 0);
+                        setColorAtIndex(index, textureMem, &color);
+                        setColorAtIndex(index, &mut self.data, &color);
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn setColorAtIndex(index: usize, data: &mut [u8], color: &Color) {
+    if let Some(element) = data.get_mut(index) {
+        *element = color.r;
+    }
+    if let Some(element) = data.get_mut(index + 1) {
+        *element = color.g;
+    }
+    if let Some(element) = data.get_mut(index + 2) {
+        *element = color.b;
+    }
+    if let Some(element) = data.get_mut(index + 3) {
+        *element = color.a;
+    }
 }
 
 trait meow {
@@ -161,7 +286,6 @@ impl divide<&i32, f32> for i32 {
     }
 }
 
-
 trait myInto<T> {
     fn into(&self) -> T;
 }
@@ -184,6 +308,14 @@ impl meow for Point {
             && self.y < square.y2;
     }
 }
+impl meow for UPoint {
+    fn isInside(&self, square: &IntRect) -> bool {
+        return (self.x as i32) >= square.x1
+            && (self.y as i32) >= square.y1
+            && (self.x as i32) < square.x1
+            && (self.y as i32) < square.y2;
+    }
+}
 fn getWidth(rect: &IntRect) -> u32 {
     return (rect.x2 - rect.x1) as u32;
 }
@@ -196,6 +328,16 @@ impl IntRect {
     }
     fn width(&self) -> u32 {
         return (self.x2 - self.x1) as u32;
+    }
+    fn centre(&self) -> (i32, i32) {
+        let x = self.x1 + self.width() as i32 / 2;
+        let y = self.y1 + self.height() as i32 / 2;
+        return (x, y);
+    }
+    fn centreF32(&self) -> (f32, f32) {
+        let x = self.x1 as f32 + self.width() as f32 / 2.0;
+        let y = self.y1 as f32 + self.height() as f32 / 2.0;
+        return (x, y);
     }
     fn height(&self) -> u32 {
         return (self.y2 - self.y1) as u32;
@@ -214,7 +356,7 @@ impl IntRect {
 }
 
 // appends all the points between point1 and point2 to list
-fn makeLine(list: &mut Vec<Point>, point1: Point, point2: Point) {
+fn makeLine(list: &mut Vec<UPoint>, point1: Point, point2: Point) {
     let mut x1 = point1.x;
     let mut y1 = point1.y;
     let x2 = point2.x;
@@ -225,7 +367,7 @@ fn makeLine(list: &mut Vec<Point>, point1: Point, point2: Point) {
     // case for vertical line
     if x1 == x2 {
         loop {
-            list.push(Point::new(x1, y1));
+            list.push(UPoint::new(x1 as u32, y1 as u32));
             if y1 == y2 {
                 break;
             }
@@ -236,7 +378,7 @@ fn makeLine(list: &mut Vec<Point>, point1: Point, point2: Point) {
     // case for horizontal line
     if y1 == y2 {
         loop {
-            list.push(Point::new(x1, y1));
+            list.push(UPoint::new(x1 as u32, y1 as u32));
             if x1 == x2 {
                 break;
             }
@@ -250,7 +392,68 @@ fn makeLine(list: &mut Vec<Point>, point1: Point, point2: Point) {
     let mut error = dy + dx;
 
     loop {
-        list.push(Point::new(x1, y1));
+        list.push(UPoint::new(x1 as u32, y1 as u32));
+        let e2 = error;
+        if e2 >= dy {
+            if x1 == x2 {
+                break;
+            };
+            error += dy;
+            x1 += sx;
+        }
+        if e2 <= dx {
+            if y1 == y2 {
+                break;
+            }
+            error += dx;
+            y1 += sy;
+        }
+    }
+}
+
+fn makeLineInRect(list: &mut Vec<UPoint>, point1: Point, point2: Point, rect: &IntRect) {
+    let mut x1 = point1.x;
+    let mut y1 = point1.y;
+    let x2 = point2.x;
+    let y2 = point2.y;
+    let sx = if (x1 < x2) { 1 } else { -1 };
+    let sy = if (y1 < y2) { 1 } else { -1 };
+
+    // case for vertical line
+    if x1 == x2 {
+        loop {
+            if Point::new(x1, y1).isInside(rect) {
+                list.push(UPoint::new((x1 - rect.x1) as u32, (y1 - rect.y1) as u32));
+            }
+            if y1 == y2 {
+                break;
+            }
+            y1 += sy;
+        }
+        return;
+    }
+    // case for horizontal line
+    if y1 == y2 {
+        loop {
+            if Point::new(x1, y1).isInside(rect) {
+                list.push(UPoint::new((x1 - rect.x1) as u32, (y1 - rect.y1) as u32));
+            }
+            if x1 == x2 {
+                break;
+            }
+            x1 += sx;
+        }
+        return;
+    }
+
+    let dx = (x2 - x1).abs();
+    let dy = -((y2 - y1).abs());
+    let mut error = dy + dx;
+
+    loop {
+        if Point::new(x1, y1).isInside(rect) {
+            list.push(UPoint::new((x1 - rect.x1) as u32, (y1 - rect.y1) as u32));
+        }
         let e2 = error;
         if e2 >= dy {
             if x1 == x2 {
@@ -277,13 +480,13 @@ fn loadShader(
     uniformBufferCount: u32,
     storageBufferCount: u32,
     storageTextureCount: u32,
-) -> Result<Shader, String> {
+) -> Result<Shader, sdl3::Error> {
     // todo i dont really need this function since im just doing "include bytes"
     let entrypoint;
     let shader_format = device.get_shader_formats();
     match shader_format {
         ShaderFormat::SPIRV => entrypoint = c"main",
-        _ => return Err("Unrecognised shader format".to_string()),
+        _ => entrypoint = c"main",
     }
     let shader = device
         .create_shader()
@@ -293,12 +496,18 @@ fn loadShader(
         .with_storage_textures(storageTextureCount)
         .with_entrypoint(entrypoint)
         .with_code(device.get_shader_formats(), code, shaderStage)
-        .build();
-    if let Ok(shader) = shader {
-        return Ok(shader);
-    } else {
-        return Err("shader failed to build".to_string());
-    }
+        .build()?;
+    return Ok(shader);
+}
+
+fn applyChangesToTexture(
+    whiteboard: &mut Whiteboard,
+    device: &Device,
+    copyPass: &CopyPass,
+    texture: &Texture,
+    transferBuffer: &TransferBuffer,
+) -> Result<(), sdl3::Error> {
+    Ok(())
 }
 
 fn writeToTexture<T: Copy>(
@@ -306,9 +515,8 @@ fn writeToTexture<T: Copy>(
     copyPass: &CopyPass,
     data: &[T],
     texture: &Texture,
-    transferBuffer: &TransferBuffer
+    transferBuffer: &TransferBuffer,
 ) -> Result<(), sdl3::Error> {
-
     let mut bufferMem = transferBuffer.map(device, false);
     // copy from slice is laggy. Instead i should make a function to only push changes
     bufferMem.mem_mut().copy_from_slice(data);
@@ -328,13 +536,14 @@ fn writeToTexture<T: Copy>(
     return Ok(());
 }
 
-// todo go over and clean up code like this later
 fn mouseMovement(
     whiteboard: &mut Whiteboard,
     point1: Point,
     point2: Point,
     toolMode: &ToolMode,
     color: Color,
+    textureMem: &mut [u8],
+    change: Option<&mut Change>,
 ) {
     match toolMode {
         ToolMode::none => {}
@@ -344,71 +553,60 @@ fn mouseMovement(
             whiteboard.canvasBounds.shift(dx, dy);
         }
         ToolMode::pencil => {
-            let mut pointList: Vec<Point> = Vec::new();
-            makeLine(&mut pointList, point1, point2);
+            let mut pointList: Vec<UPoint> = Vec::new();
+            makeLineInRect(&mut pointList, point1, point2, &whiteboard.canvasBounds);
+            let mut oldPixels: Vec<Pixel> = Vec::with_capacity(pointList.len());
+            let mut newPixels: Vec<Pixel> = Vec::with_capacity(pointList.len());
             for point in pointList {
-                if (!point.isInside(&whiteboard.canvasBounds)) {
-                    continue;
+                let index = (point.x as usize
+                    + (point.y as usize * whiteboard.canvasBounds.width() as usize))
+                    * 4;
+                let oldColor = getColorAtIndex(index, whiteboard);
+                // should always be true i think
+                if let Some(oldColor) = oldColor {
+                    oldPixels.push(Pixel {
+                        color: oldColor,
+                        point: UPoint {
+                            x: point.x,
+                            y: point.y
+                        },
+                    });
                 }
-                let normalX = (point.x - whiteboard.canvasBounds.x1) as usize;
-                let normalY = (point.y - whiteboard.canvasBounds.y1) as usize;
-                // i think canvas X and Y are the issue
-                let index = (normalX + (normalY * whiteboard.canvasBounds.width() as usize)) * 4;
-                if let Some(element) = whiteboard.data.get_mut(index) {
-                    *element = color.r;
-                }
-                if let Some(element) = whiteboard.data.get_mut(index + 1) {
-                    *element = color.g;
-                }
-                if let Some(element) = whiteboard.data.get_mut(index + 2) {
-                    *element = color.b;
-                }
-                if let Some(element) = whiteboard.data.get_mut(index + 3) {
-                    *element = color.a;
-                }
+                setColorAtIndex(index, &mut whiteboard.data, &color);
+                setColorAtIndex(index, textureMem, &color);
+                newPixels.push(Pixel::new(color, point));
+            }
+            //whiteboard.changes.last()
+            if let Some(Change::pencil { old, new }) = change {
+                old.append(&mut oldPixels);
+                new.append(&mut newPixels);
             }
         }
+        // todo fix
         ToolMode::eraser => {
             // i really hope theres a more pretty way to do this :sob:
-            let mut pointList: Vec<Point> = Vec::new();
+            let mut pointList: Vec<UPoint> = Vec::new();
             makeLine(&mut pointList, point1, point2);
             for eraserPoint in pointList {
                 if (!eraserPoint.isInside(&whiteboard.canvasBounds)) {
                     continue;
                 };
-                let normalX = (eraserPoint.x - whiteboard.canvasBounds.x1) as usize;
-                let normalY = (eraserPoint.y - whiteboard.canvasBounds.y1) as usize;
+                let normalX = (eraserPoint.x as i32 - whiteboard.canvasBounds.x1) as usize;
+                let normalY = (eraserPoint.y as i32 - whiteboard.canvasBounds.y1) as usize;
                 let index = (normalX + (normalY * whiteboard.canvasBounds.width() as usize)) * 4;
-                if let Some(element) = whiteboard.data.get_mut(index) {
-                    *element = whiteboard.bgcolor.r;
-                }
-                if let Some(element) = whiteboard.data.get_mut(index + 1) {
-                    *element = whiteboard.bgcolor.g;
-                }
-                if let Some(element) = whiteboard.data.get_mut(index + 2) {
-                    *element = whiteboard.bgcolor.b;
-                }
-                if let Some(element) = whiteboard.data.get_mut(index + 3) {
-                    *element = whiteboard.bgcolor.a;
-                }
-                //let mut pixelErased = false;
-                //'inner: for pixels in &mut whiteboard.pixels {
-                //    for i in 0..pixels.points.len() {
-                //        if (pixels.points.get(i).is_some()) {
-                //            let point = pixels.points.get(i).unwrap();
-                //            if (eraserPoint == *point) {
-                //                // swap remove is faster and i dont need order
-                //                //pixels.points.swap_remove(i);
-                //                //whiteboard.canvas.set_draw_color(color);
-                //                //let result = whiteboard.canvas.draw_point(eraserPoint);
-
-                //                break 'inner;
-                //            }
-                //        }
-                //    }
+                setColorAtIndex(index, &mut whiteboard.data, &color);
+                setColorAtIndex(index, textureMem, &color);
             }
         }
     }
+}
+
+fn getColorAtIndex(index: usize, whiteboard: &Whiteboard) -> Option<Color> {
+    let r = *whiteboard.data.get(index)?;
+    let g = *whiteboard.data.get(index + 1)?;
+    let b = *whiteboard.data.get(index + 2)?;
+    let a = *whiteboard.data.get(index + 3)?;
+    return Some(Color::RGBA(r, g, b, a));
 }
 
 fn createBufferWithData<T: Copy>(
@@ -489,17 +687,16 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     let mut whiteboard = Whiteboard {
         canvasBounds,
-        //canvas,
-        pixels: Vec::with_capacity(10_000),
         bgcolor: bgcolor,
         data: data,
+        changes: Vec::new(),
+        changesIndex: 0,
     };
     let mut toolMode = ToolMode::pencil;
     let mut oldTool = ToolMode::none;
 
     // needs shader format, such as SPIRV, MSL, etc
-    let device = Device::new(sdl3::gpu::ShaderFormat::SPIRV | ShaderFormat::DXIL, true)?
-        .with_window(&window)?;
+    let device = Device::new(ShaderFormat::SPIRV, true)?.with_window(&window)?;
 
     //println!("{:?}", vertexShaderCode);
     let ColorTargetDescriptions: &[sdl3::gpu::ColorTargetDescription] =
@@ -544,7 +741,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             RasterizerState::new()
                 .with_fill_mode(FillMode::Fill)
                 .with_cull_mode(CullMode::None),
-        ).build()?;
+        )
+        .build()?;
     drop(vertexShader);
     drop(fragShader);
 
@@ -617,15 +815,22 @@ fn main() -> Result<(), Box<dyn Error>> {
             .with_type(TextureType::_2D)
             .with_sample_count(SampleCount::NoMultiSampling),
     )?;
-    let pixelsTextureTransferBuffer = device.create_transfer_buffer()
+    let pixelsTextureTransferBuffer = device
+        .create_transfer_buffer()
         .with_usage(TransferBufferUsage::UPLOAD)
         .with_size(whiteboard.data.len() as u32)
         .build()?;
 
     {
-        let mut commandBuffer = device.acquire_command_buffer()?;
+        let commandBuffer = device.acquire_command_buffer()?;
         let copyPass = device.begin_copy_pass(&commandBuffer)?;
-        writeToTexture(&device, &copyPass, whiteboard.data.as_slice(), &pixelsTexture, &pixelsTextureTransferBuffer);
+        writeToTexture(
+            &device,
+            &copyPass,
+            whiteboard.data.as_slice(),
+            &pixelsTexture,
+            &pixelsTextureTransferBuffer,
+        );
         device.end_copy_pass(copyPass);
         commandBuffer.submit()?;
     }
@@ -640,10 +845,25 @@ fn main() -> Result<(), Box<dyn Error>> {
             .with_address_mode_w(SamplerAddressMode::ClampToEdge),
     )?;
 
+    //let undoTransferBuffer = device
+    //    .create_transfer_buffer()
+    //    .with_size(whiteboard.canvasBounds.width() * whiteboard.canvasBounds.height() * 4)
+    //    .with_usage(TransferBufferUsage::UPLOAD)
+    //    .build()?;
+    let mut textureBufferMemMap = pixelsTextureTransferBuffer.map(&device, false);
+    textureBufferMemMap
+        .mem_mut()
+        .copy_from_slice(&whiteboard.data);
+
+    let mut change: Option<Box<Change>> = None;
     'running: loop {
         let mut needsDraw = false;
         let mut needsClear = false;
         let mut canvasMoved = false;
+        // here i need some "change" variable
+        // when you for example, release left click,
+        // itll push the pencil changes to the changes variable
+
         for event in event_pump.poll_iter() {
             match event {
                 Event::Quit { .. }
@@ -655,10 +875,49 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
                 Event::MouseButtonDown { .. } => {
                     mouseHeldDown = true;
+                    match toolMode {
+                        ToolMode::pencil => {
+                            if change.is_none() {
+                                let mut tmp = Change::pencil {
+                                    old: Vec::new(),
+                                    new: Vec::new(),
+                                };
+                                change = Some(Box::new(tmp));
+                            }
+                        }
+                        ToolMode::eraser => {
+                            if change.is_none() {
+                                change = Some(Box::new(Change::eraser { old: Vec::new() }));
+                            }
+                        }
+                        _ => {}
+                    }
                 }
                 Event::MouseButtonUp { .. } => {
                     mouseHeldDown = false;
                     point2 = None;
+                    // take ownership and reassign
+                    if let Some(meowtuah) = &change {
+                        match **meowtuah {
+                            Change::pencil { ref old, ref new } => {
+                                //whiteboard.changes.push(value);
+                                if let Some(idk) = change { // take ownership as late as possible
+                                    // this logic is wrong lolll
+                                    // you wanna insert at whiteboard.changesIndex
+                                    whiteboard.changes.push(*idk);
+                                    whiteboard.changesIndex += 1;
+                                }
+                                change = None;
+                            }
+                            Change::eraser { ref old } => {
+                                if let Some(idk) = change {
+                                    whiteboard.changes.push(*idk);
+                                    whiteboard.changesIndex += 1;
+                                }
+                                change = None;
+                            }
+                        }
+                    }
                 }
                 Event::KeyDown {
                     keycode: Some(Keycode::E),
@@ -672,7 +931,6 @@ fn main() -> Result<(), Box<dyn Error>> {
                 } => {
                     toolMode = ToolMode::pencil;
                 }
-                // resizing fucks with canvasBounds for some reason
                 Event::Window {
                     win_event: WindowEvent::Resized(x, y),
                     ..
@@ -698,6 +956,18 @@ fn main() -> Result<(), Box<dyn Error>> {
                         - 1.0);
                 }
                 Event::KeyDown {
+                    keycode: Some(Keycode::U),
+                    ..
+                } => {
+                    whiteboard.undo(textureBufferMemMap.mem_mut());
+                }
+                Event::KeyDown {
+                    keycode: Some(Keycode::R),
+                    ..
+                } => {
+                    whiteboard.redo(textureBufferMemMap.mem_mut());
+                }
+                Event::KeyDown {
                     keycode: Some(Keycode::Space),
                     ..
                 } => {
@@ -715,9 +985,6 @@ fn main() -> Result<(), Box<dyn Error>> {
                 Event::MouseMotion { x, y, .. } => {
                     point1 = Point::new(x as i32, y as i32);
                     if (mouseHeldDown && point2.is_some()) {
-                        //if (toolMode == ToolMode::movingCanvas) {
-                        //    needsClear = true;
-                        //}
                         if (toolMode == ToolMode::pencil || toolMode == ToolMode::eraser) {
                             needsDraw = true;
                         } else if (toolMode == ToolMode::movingCanvas) {
@@ -729,7 +996,15 @@ fn main() -> Result<(), Box<dyn Error>> {
                             point2.unwrap(),
                             &toolMode,
                             currentColor,
+                            textureBufferMemMap.mem_mut(),
+                            if let Some(ref mut x) = change {
+                                Some(x.as_mut())
+                            } else {
+                                None
+                            }
                         );
+                        //println!("hi");
+                        //println!("{:?}", change);
                     }
                     point2 = Some(point1);
                 }
@@ -737,29 +1012,49 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
         }
 
-        data[0] = whiteboard.canvasBounds.width().divide(&window.size().0);
-        data[5] = whiteboard.canvasBounds.height().divide(&window.size().1);
-        if canvasMoved {
-            data[3] = ((whiteboard.canvasBounds.x1 as f32
-                + whiteboard.canvasBounds.width().divide(2))
-                / window.size().0 as f32)
-                * 2.0
-                - 1.0;
-            data[7] = -(((whiteboard.canvasBounds.y1 as f32
-                + whiteboard.canvasBounds.height().divide(2))
-                / window.size().1 as f32)
-                * 2.0
-                - 1.0);
-        }
-
-        // copy pixels to texture
-        if (needsDraw) {
+        // submit undo and redo changes
+        //textureBufferMemMap.unmap();
+        {
             let commandBuffer = device.acquire_command_buffer()?;
             let copyPass = device.begin_copy_pass(&commandBuffer)?;
-            writeToTexture(&device, &copyPass, whiteboard.data.as_slice(), &pixelsTexture, &pixelsTextureTransferBuffer);
+            copyPass.upload_to_gpu_texture(
+                TextureTransferInfo::new()
+                    .with_transfer_buffer(&pixelsTextureTransferBuffer)
+                    .with_offset(0),
+                TextureRegion::new()
+                    .with_texture(&pixelsTexture)
+                    .with_height(pixelsTexture.height())
+                    .with_width(pixelsTexture.width())
+                    .with_depth(1),
+                false,
+            );
             device.end_copy_pass(copyPass);
             commandBuffer.submit()?;
         }
+
+        // scaling
+        data[0] = whiteboard.canvasBounds.width().divide(&window.size().0);
+        data[5] = whiteboard.canvasBounds.height().divide(&window.size().1);
+        if (canvasMoved) {
+            // translation
+            data[3] = (whiteboard.canvasBounds.centreF32().0 / window.size().0 as f32) * 2.0 - 1.0;
+            data[7] = -((whiteboard.canvasBounds.centreF32().1 / window.size().1 as f32) * 2.0 - 1.0);
+        }
+
+        // copy pixels to texture
+        //if (needsDraw) {
+        //    let commandBuffer = device.acquire_command_buffer()?;
+        //    let copyPass = device.begin_copy_pass(&commandBuffer)?;
+        //    writeToTexture(
+        //        &device,
+        //        &copyPass,
+        //        whiteboard.data.as_slice(),
+        //        &pixelsTexture,
+        //        &pixelsTextureTransferBuffer,
+        //    );
+        //    device.end_copy_pass(copyPass);
+        //    commandBuffer.submit()?;
+        //}
 
         // DRAWING
         let mut commandBuffer = device.acquire_command_buffer()?;
@@ -825,7 +1120,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         //whiteboard.pixels.debugPrint();
 
         // call at the end of every loop
-        let targetFPS = 144;
+        let targetFPS = 500;
         sleep(Duration::new(0, 1_000_000_000u32 / targetFPS));
         //sdl3::timer::delay(16);
     }
