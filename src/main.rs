@@ -8,80 +8,64 @@
     unused,
     dead_code
 )]
-//extern crate sdl3;
 
-//use sdl3::Error;
 use sdl3::Sdl;
 use sdl3::VideoSubsystem;
 use sdl3::event::Event;
 use sdl3::event::WindowEvent;
-use sdl3::gpu::Buffer;
-use sdl3::gpu::BufferBinding;
-use sdl3::gpu::BufferRegion;
-use sdl3::gpu::BufferUsageFlags;
-use sdl3::gpu::CommandBuffer;
-use sdl3::gpu::CopyPass;
-use sdl3::gpu::CullMode;
-use sdl3::gpu::Device;
-use sdl3::gpu::FillMode;
-use sdl3::gpu::Filter;
-use sdl3::gpu::GraphicsPipeline;
-use sdl3::gpu::GraphicsPipelineBuilder;
-use sdl3::gpu::GraphicsPipelineTargetInfo;
-use sdl3::gpu::IndexElementSize;
-use sdl3::gpu::LoadOp;
-use sdl3::gpu::RasterizerState;
-use sdl3::gpu::SampleCount;
-use sdl3::gpu::SamplerAddressMode;
-use sdl3::gpu::SamplerCreateInfo;
-use sdl3::gpu::SamplerMipmapMode;
-use sdl3::gpu::Shader;
-use sdl3::gpu::ShaderFormat;
-use sdl3::gpu::ShaderStage;
-use sdl3::gpu::Texture;
-use sdl3::gpu::TextureRegion;
-use sdl3::gpu::TextureSamplerBinding;
-use sdl3::gpu::TextureTransferInfo;
-use sdl3::gpu::TextureType;
-use sdl3::gpu::TransferBuffer;
-use sdl3::gpu::TransferBufferLocation;
-use sdl3::gpu::TransferBufferUsage;
-use sdl3::gpu::VertexAttribute;
-use sdl3::gpu::VertexBufferDescription;
-use sdl3::gpu::VertexElementFormat;
-use sdl3::gpu::VertexInputRate;
-use sdl3::gpu::VertexInputState;
-use sdl3::gpu::Viewport;
-use sdl3::gpu::{
-    ColorTargetInfo, DepthStencilTargetInfo, StoreOp, TextureCreateInfo, TextureFormat,
-    TextureUsage,
-};
-use sdl3::hint::Hint;
-use sdl3::hint::names;
-use sdl3::hint::set_with_priority;
+//use sdl3::gpu::Buffer;
+//use sdl3::gpu::BufferBinding;
+//use sdl3::gpu::BufferRegion;
+//use sdl3::gpu::BufferUsageFlags;
+//use sdl3::gpu::CopyPass;
+//use sdl3::gpu::CullMode;
+//use sdl3::gpu::Device;
+//use sdl3::gpu::FillMode;
+//use sdl3::gpu::Filter;
+//use sdl3::gpu::GraphicsPipelineTargetInfo;
+//use sdl3::gpu::IndexElementSize;
+//use sdl3::gpu::LoadOp;
+//use sdl3::gpu::RasterizerState;
+//use sdl3::gpu::SampleCount;
+//use sdl3::gpu::SamplerAddressMode;
+//use sdl3::gpu::SamplerCreateInfo;
+//use sdl3::gpu::SamplerMipmapMode;
+//use sdl3::gpu::Shader;
+//use sdl3::gpu::ShaderFormat;
+//use sdl3::gpu::ShaderStage;
+//use sdl3::gpu::Texture;
+//use sdl3::gpu::TextureRegion;
+//use sdl3::gpu::TextureSamplerBinding;
+//use sdl3::gpu::TextureTransferInfo;
+//use sdl3::gpu::TextureType;
+//use sdl3::gpu::TransferBuffer;
+//use sdl3::gpu::TransferBufferLocation;
+//use sdl3::gpu::TransferBufferUsage;
+//use sdl3::gpu::VertexAttribute;
+//use sdl3::gpu::VertexBufferDescription;
+//use sdl3::gpu::VertexElementFormat;
+//use sdl3::gpu::VertexInputRate;
+//use sdl3::gpu::VertexInputState;
+//use sdl3::gpu::{
+//    ColorTargetInfo, DepthStencilTargetInfo, StoreOp, TextureCreateInfo, TextureFormat,
+//    TextureUsage,
+//};
+use sdl3::gpu::*;
 use sdl3::keyboard::Keycode;
 use sdl3::pixels::Color;
-use sdl3::pixels::PixelFormat;
 use sdl3::rect::Point;
 use sdl3::rect::Rect;
-use sdl3::render::Canvas;
-use sdl3::render::FPoint;
 use sdl3::render::FRect;
-use sdl3::sys::gpu::SDL_GPUColorTargetInfo;
-use sdl3::sys::keycode::SDLK_SPACE;
 use sdl3::sys::video::SDL_WINDOW_RESIZABLE;
-use sdl3::video::Window;
 use std::error::Error;
-use std::ffi::CStr;
 use std::fmt::Debug;
-use std::ops::Index;
 use std::thread::sleep;
 use std::time::Duration;
 
 static vertexShaderCode: &'static [u8] = include_bytes!("shaders/vertex.spv");
 static fragShaderCode: &'static [u8] = include_bytes!("shaders/frag.spv");
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct UPoint {
     x: u32,
     y: u32,
@@ -93,7 +77,7 @@ impl UPoint {
     }
 }
 
-//i should make this myself
+// TODO i should make this myself
 //#[derive(new)]
 #[derive(Debug)]
 struct Pixel {
@@ -109,6 +93,28 @@ struct Pixels {
 impl Pixel {
     fn new(color: Color, point: UPoint) -> Pixel {
         return Pixel { color, point };
+    }
+}
+
+trait drawPixel {
+    fn drawPixel(&mut self, pixel: &Pixel, width: usize);
+    fn erasePixel(&mut self, point: &UPoint, width: usize);
+    fn drawColorAtPoint(&mut self, point: &UPoint, color: &Color, width: usize);
+}
+
+impl drawPixel for &mut [u8] {
+    fn drawPixel(&mut self, pixel: &Pixel, width: usize) {
+        let index = (pixel.point.x as usize + pixel.point.y as usize * width as usize) * 4;
+        setColorAtIndex(index, self, &pixel.color);
+        //setColorAtIndex(self.index, data, color);
+    }
+    fn drawColorAtPoint(&mut self, point: &UPoint, color: &Color, width: usize) {
+        let index = (point.x as usize + point.y as usize * width as usize) * 4;
+        setColorAtIndex(index, self, color);
+    }
+    fn erasePixel(&mut self, point: &UPoint, width: usize) {
+        let index = (point.x as usize + point.y as usize * width as usize) * 4;
+        setColorAtIndex(index, self, &Color::RGBA(0, 0, 0, 0));
     }
 }
 
@@ -151,6 +157,33 @@ struct Whiteboard {
     changesIndex: usize,
 }
 
+impl Whiteboard {
+    fn getIndexOfPoint(&self, point: &UPoint) -> usize {
+        return (point.x as usize + (point.y as usize * self.canvasBounds.width() as usize)) * 4;
+    }
+    // this should return a result or something lol
+    fn drawPixel(&mut self, pixel: &Pixel) {
+        setColorAtIndex(
+            self.getIndexOfPoint(&pixel.point),
+            &mut self.data,
+            &pixel.color,
+        );
+    }
+    fn erasePixel(&mut self, point: &UPoint) {
+        setColorAtIndex(
+            self.getIndexOfPoint(point),
+            &mut self.data,
+            &Color::RGBA(0, 0, 0, 0),
+        );
+    }
+    fn getColorAtPoint(&self, point: &UPoint) -> Option<Color> {
+        return getColorAtIndex(self.getIndexOfPoint(point), &self.data);
+    }
+    fn width(&self) -> u32 {
+        return self.canvasBounds.width();
+    }
+}
+
 #[derive(PartialEq, Clone, Copy, Debug)]
 enum ToolMode {
     none,
@@ -169,35 +202,31 @@ trait Undo {
 impl Undo for Whiteboard {
     fn undo(&mut self, textureMem: &mut [u8]) {
         // if index is 0, there are no changes
-        if self.changesIndex != 0 && let Some(change) = self.changes.get(self.changesIndex - 1) {
+        if self.changesIndex != 0
+            && let Some(change) = self.changes.get(self.changesIndex - 1)
+        {
             self.changesIndex -= 1;
             match change {
                 Change::pencil { old, new } => {
                     for pixel in old {
                         // i should make this a function or something lol, for index
                         let index: usize = (pixel.point.x as usize
-                            + pixel.point.y as usize * self.canvasBounds.width() as usize) * 4;
+                            + pixel.point.y as usize * self.canvasBounds.width() as usize)
+                            * 4;
                         setColorAtIndex(index, textureMem, &pixel.color);
                         setColorAtIndex(index, &mut self.data, &pixel.color);
-                    }
-                    //textureMem.debugPrint();
-                    for i in (0..self.canvasBounds.width()*self.canvasBounds.height()) {
-                        let index = i as usize * 4;
-                        let color = getColorAtIndex(index, self);
-                        if let Some(color) = color {
-                            if color.r == 255 {
-                                println!("FUCK THIS IS BAD");
-                            }
-                        }
                     }
                 }
                 Change::eraser { old } => {
                     // restore old colors of everything
                     for pixel in old {
                         let index: usize = (pixel.point.x as usize
-                            + pixel.point.y as usize * self.canvasBounds.width() as usize) * 4;
+                            + pixel.point.y as usize * self.canvasBounds.width() as usize)
+                            * 4;
                         setColorAtIndex(index, textureMem, &pixel.color);
                         setColorAtIndex(index, &mut self.data, &pixel.color);
+                        //self.drawPixel(pixel);
+                        //self.data.as_mut_slice().drawPixel(pixel, self.width() as usize);
                     }
                 }
             }
@@ -209,7 +238,8 @@ impl Undo for Whiteboard {
                 Change::pencil { new, .. } => {
                     for pixel in new {
                         let index: usize = (pixel.point.x as usize
-                            + pixel.point.y as usize * self.canvasBounds.width() as usize) * 4;
+                            + pixel.point.y as usize * self.canvasBounds.width() as usize)
+                            * 4;
                         setColorAtIndex(index, textureMem, &pixel.color);
                         setColorAtIndex(index, &mut self.data, &pixel.color);
                     }
@@ -218,7 +248,8 @@ impl Undo for Whiteboard {
                 Change::eraser { old } => {
                     for pixel in old {
                         let index: usize = (pixel.point.x as usize
-                            + pixel.point.y as usize * self.canvasBounds.width() as usize) * 4;
+                            + pixel.point.y as usize * self.canvasBounds.width() as usize)
+                            * 4;
                         let color = Color::RGBA(0, 0, 0, 0);
                         setColorAtIndex(index, textureMem, &color);
                         setColorAtIndex(index, &mut self.data, &color);
@@ -500,16 +531,6 @@ fn loadShader(
     return Ok(shader);
 }
 
-fn applyChangesToTexture(
-    whiteboard: &mut Whiteboard,
-    device: &Device,
-    copyPass: &CopyPass,
-    texture: &Texture,
-    transferBuffer: &TransferBuffer,
-) -> Result<(), sdl3::Error> {
-    Ok(())
-}
-
 fn writeToTexture<T: Copy>(
     device: &Device,
     copyPass: &CopyPass,
@@ -542,7 +563,7 @@ fn mouseMovement(
     point2: Point,
     toolMode: &ToolMode,
     color: Color,
-    textureMem: &mut [u8],
+    mut textureMem: &mut [u8],
     change: Option<&mut Change>,
 ) {
     match toolMode {
@@ -558,25 +579,13 @@ fn mouseMovement(
             let mut oldPixels: Vec<Pixel> = Vec::with_capacity(pointList.len());
             let mut newPixels: Vec<Pixel> = Vec::with_capacity(pointList.len());
             for point in pointList {
-                let index = (point.x as usize
-                    + (point.y as usize * whiteboard.canvasBounds.width() as usize))
-                    * 4;
-                let oldColor = getColorAtIndex(index, whiteboard);
-                // should always be true i think
-                if let Some(oldColor) = oldColor {
-                    oldPixels.push(Pixel {
-                        color: oldColor,
-                        point: UPoint {
-                            x: point.x,
-                            y: point.y
-                        },
-                    });
+                textureMem.drawColorAtPoint(&point, &color, whiteboard.width() as usize);
+                let oldColor = whiteboard.getColorAtPoint(&point);
+                if let Some(oldColor) = oldColor && (color != oldColor) {
+                    oldPixels.push(Pixel::new(oldColor, point.clone()));
+                    newPixels.push(Pixel::new(color, point));
                 }
-                setColorAtIndex(index, &mut whiteboard.data, &color);
-                setColorAtIndex(index, textureMem, &color);
-                newPixels.push(Pixel::new(color, point));
             }
-            //whiteboard.changes.last()
             if let Some(Change::pencil { old, new }) = change {
                 old.append(&mut oldPixels);
                 new.append(&mut newPixels);
@@ -584,7 +593,6 @@ fn mouseMovement(
         }
         // todo fix
         ToolMode::eraser => {
-            // i really hope theres a more pretty way to do this :sob:
             let mut pointList: Vec<UPoint> = Vec::new();
             makeLine(&mut pointList, point1, point2);
             for eraserPoint in pointList {
@@ -601,11 +609,11 @@ fn mouseMovement(
     }
 }
 
-fn getColorAtIndex(index: usize, whiteboard: &Whiteboard) -> Option<Color> {
-    let r = *whiteboard.data.get(index)?;
-    let g = *whiteboard.data.get(index + 1)?;
-    let b = *whiteboard.data.get(index + 2)?;
-    let a = *whiteboard.data.get(index + 3)?;
+fn getColorAtIndex(index: usize, data: &[u8]) -> Option<Color> {
+    let r = *data.get(index)?;
+    let g = *data.get(index + 1)?;
+    let b = *data.get(index + 2)?;
+    let a = *data.get(index + 3)?;
     return Some(Color::RGBA(r, g, b, a));
 }
 
@@ -747,21 +755,21 @@ fn main() -> Result<(), Box<dyn Error>> {
     drop(fragShader);
 
     // copying vertex data to gpu
-    let mut commandBuffer = device.acquire_command_buffer()?;
+    let commandBuffer = device.acquire_command_buffer()?;
     let copyPass = device.begin_copy_pass(&commandBuffer)?;
     #[rustfmt::skip]
-        let vertexData: &[Vertex] = &[
-            Vertex {x:  1.0, y:  1.0, z: 0.0, u: 1.0, v: 0.0},
-            Vertex {x:  1.0, y: -1.0, z: 0.0, u: 1.0, v: 1.0},
-            Vertex {x: -1.0, y: -1.0, z: 0.0, u: 0.0, v: 1.0},
-            Vertex {x: -1.0, y:  1.0, z: 0.0, u: 0.0, v: 0.0}
-        ];
+    let vertexData: &[Vertex] = &[
+        Vertex {x:  1.0, y:  1.0, z: 0.0, u: 1.0, v: 0.0},
+        Vertex {x:  1.0, y: -1.0, z: 0.0, u: 1.0, v: 1.0},
+        Vertex {x: -1.0, y: -1.0, z: 0.0, u: 0.0, v: 1.0},
+        Vertex {x: -1.0, y:  1.0, z: 0.0, u: 0.0, v: 0.0}
+    ];
 
     #[rustfmt::skip]
-        let vertexIndicies: &[u16] = &[
-            0, 1, 3,
-            1, 2, 3
-        ];
+    let vertexIndicies: &[u16] = &[
+        0, 1, 3,
+        1, 2, 3
+    ];
     let transferBuffer = device
         .create_transfer_buffer()
         .with_usage(TransferBufferUsage::UPLOAD)
@@ -792,19 +800,19 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut point2: Option<Point> = None;
 
     // uniform buffer data
-    let translateX = 0.0;
-    let translateY = 0.0;
+    //let translateX = 0.0;
+    //let translateY = 0.0;
     // important!!!
     // 32 bit floats are used (for some reason)
     #[rustfmt::skip]
-        let mut data: [f32; 16] = [
-            1.0, 0.0, 0.0, 0.0,
-            0.0, 1.0, 0.0, 0.0,
-            0.0, 0.0, 1.0, 0.0,
-            0.0, 0.0, 0.0, 1.0
-        ];
+    let mut data: [f32; 16] = [
+        1.0, 0.0, 0.0, 0.0,
+        0.0, 1.0, 0.0, 0.0,
+        0.0, 0.0, 1.0, 0.0,
+        0.0, 0.0, 0.0, 1.0
+    ];
 
-    let mut pixelsTexture = device.create_texture(
+    let pixelsTexture = device.create_texture(
         TextureCreateInfo::new()
             .with_num_levels(1)
             .with_layer_count_or_depth(1)
@@ -830,7 +838,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             whiteboard.data.as_slice(),
             &pixelsTexture,
             &pixelsTextureTransferBuffer,
-        );
+        )?;
         device.end_copy_pass(copyPass);
         commandBuffer.submit()?;
     }
@@ -845,11 +853,6 @@ fn main() -> Result<(), Box<dyn Error>> {
             .with_address_mode_w(SamplerAddressMode::ClampToEdge),
     )?;
 
-    //let undoTransferBuffer = device
-    //    .create_transfer_buffer()
-    //    .with_size(whiteboard.canvasBounds.width() * whiteboard.canvasBounds.height() * 4)
-    //    .with_usage(TransferBufferUsage::UPLOAD)
-    //    .build()?;
     let mut textureBufferMemMap = pixelsTextureTransferBuffer.map(&device, false);
     textureBufferMemMap
         .mem_mut()
@@ -860,9 +863,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         let mut needsDraw = false;
         let mut needsClear = false;
         let mut canvasMoved = false;
-        // here i need some "change" variable
-        // when you for example, release left click,
-        // itll push the pencil changes to the changes variable
 
         for event in event_pump.poll_iter() {
             match event {
@@ -878,11 +878,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                     match toolMode {
                         ToolMode::pencil => {
                             if change.is_none() {
-                                let mut tmp = Change::pencil {
+                                change = Some(Box::new(Change::pencil {
                                     old: Vec::new(),
                                     new: Vec::new(),
-                                };
-                                change = Some(Box::new(tmp));
+                                }));
                             }
                         }
                         ToolMode::eraser => {
@@ -900,12 +899,25 @@ fn main() -> Result<(), Box<dyn Error>> {
                     if let Some(meowtuah) = &change {
                         match **meowtuah {
                             Change::pencil { ref old, ref new } => {
-                                //whiteboard.changes.push(value);
-                                if let Some(idk) = change { // take ownership as late as possible
+                                // we dont push the change to the canvas itself until you release mouse click
+                                // this makes it so undo will bring you back to the state before you did anything
+                                for pixel in new {
+                                    whiteboard.drawPixel(pixel);
+                                }
+                                if let Some(idk) = change {
+                                    // take ownership as late as possible
                                     // this logic is wrong lolll
                                     // you wanna insert at whiteboard.changesIndex
-                                    whiteboard.changes.push(*idk);
-                                    whiteboard.changesIndex += 1;
+                                    if whiteboard.changesIndex == whiteboard.changes.len() {
+                                        whiteboard.changes.push(*idk);
+                                        whiteboard.changesIndex += 1;
+                                    } else if let Some(change) =
+                                        whiteboard.changes.get_mut(whiteboard.changesIndex)
+                                    {
+                                        *change = *idk;
+                                        whiteboard.changes.truncate(whiteboard.changesIndex + 1);
+                                        whiteboard.changesIndex += 1;
+                                    }
                                 }
                                 change = None;
                             }
@@ -932,7 +944,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     toolMode = ToolMode::pencil;
                 }
                 Event::Window {
-                    win_event: WindowEvent::Resized(x, y),
+                    win_event: WindowEvent::Resized(..),
                     ..
                 } => {
                     //assert_eq!(x as u32, window.size().0);
@@ -1001,10 +1013,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                                 Some(x.as_mut())
                             } else {
                                 None
-                            }
+                            },
                         );
-                        //println!("hi");
-                        //println!("{:?}", change);
                     }
                     point2 = Some(point1);
                 }
@@ -1038,7 +1048,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         if (canvasMoved) {
             // translation
             data[3] = (whiteboard.canvasBounds.centreF32().0 / window.size().0 as f32) * 2.0 - 1.0;
-            data[7] = -((whiteboard.canvasBounds.centreF32().1 / window.size().1 as f32) * 2.0 - 1.0);
+            data[7] =
+                -((whiteboard.canvasBounds.centreF32().1 / window.size().1 as f32) * 2.0 - 1.0);
         }
 
         // copy pixels to texture
@@ -1059,7 +1070,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         // DRAWING
         let mut commandBuffer = device.acquire_command_buffer()?;
 
-        let mut swapchainTexture = commandBuffer
+        let swapchainTexture = commandBuffer
             .wait_and_acquire_swapchain_texture(&window)
             .unwrap();
         let targetInfo: ColorTargetInfo = ColorTargetInfo::default()
