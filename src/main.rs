@@ -52,9 +52,11 @@ struct Pixel {
     point: UPoint,
 }
 
+#[derive(Debug)]
 struct Pixels {
     inner: HashMap<UPoint, Color>,
 }
+#[derive(Debug)]
 struct Points {
     inner: HashSet<UPoint>,
 }
@@ -193,6 +195,7 @@ impl erasePoint<&UPoint> for Whiteboard {
     }
 }
 
+#[derive(Debug)]
 struct IntRect {
     x1: i32,
     y1: i32,
@@ -211,6 +214,7 @@ struct Vertex {
 }
 
 // maybe i could do this with dynamic dispatch instead of enums
+#[derive(Debug)]
 enum Change {
     pencil { old: Pixels, new: Pixels },
     // obviously, new is RGBA 0 0 0 0
@@ -223,6 +227,7 @@ enum Change {
 // i need to be able to just call whiteboard.changes.undo()
 // and whiteboard.changes.redo()
 
+#[derive(Debug)]
 struct WhiteboardData {
     canvasBounds: IntRect,
     data: Vec<u8>,
@@ -233,6 +238,7 @@ impl WhiteboardData {
     }
 }
 
+#[derive(Debug)]
 struct Whiteboard {
     data: WhiteboardData,
     bgcolor: Color,
@@ -253,7 +259,7 @@ impl Whiteboard {
         return self.data.canvasBounds.width();
     }
     fn height(&self) -> u32 {
-        return self.data.canvasBounds.width();
+        return self.data.canvasBounds.height();
     }
     fn x1(&self) -> i32 {
         return self.data.canvasBounds.x1;
@@ -327,6 +333,7 @@ impl Undo for Whiteboard {
     }
     fn redo(&mut self, mut textureMem: &mut [u8]) {
         if let Some(change) = self.changes.get(self.changesIndex) {
+            self.changesIndex += 1;
             match change {
                 Change::pencil { new, .. } => {
                     for pixel in new {
@@ -619,7 +626,7 @@ fn loadShader(
     return Ok(shader);
 }
 
-fn writeToTexture<T: Copy>(
+fn writeToTexture<T: Copy + Sized>(
     device: &Device,
     copyPass: &CopyPass,
     data: &[T],
@@ -790,6 +797,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     };
 
     let bgcolor = Color::RGB(80, 80, 80);
+    // vec len is 1.8 million
     let mut data: Vec<u8> =
         Vec::with_capacity(canvasBounds.width() as usize * canvasBounds.height() as usize * 4);
     for _ in 0..(canvasBounds.width() * canvasBounds.height()) {
@@ -798,6 +806,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         data.push(bgcolor.b);
         data.push(bgcolor.a);
     }
+    //(canvasBounds.width() * canvasBounds.height() * 4).debugPrint();
     let mut whiteboard = Whiteboard {
         data: WhiteboardData {
             canvasBounds: canvasBounds,
@@ -938,10 +947,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     {
         let commandBuffer = device.acquire_command_buffer()?;
         let copyPass = device.begin_copy_pass(&commandBuffer)?;
+        // theres an error here lol
+        let x = whiteboard.data.data.as_slice();
         writeToTexture(
             &device,
             &copyPass,
-            whiteboard.data.data.as_slice(),
+            x,
             &pixelsTexture,
             &pixelsTextureTransferBuffer,
         )?;
