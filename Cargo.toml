@@ -5,3 +5,6 @@ edition = "2024"
 
 [dependencies]
 sdl3 = {version = "0.15"}
+
+[build-dependencies]
+shaderc = "0.10"
