@@ -785,19 +785,18 @@ fn main() -> Result<(), Box<dyn Error>> {
     let window = video_subsystem
         .window("window", width, height)
         // todo find the rust version of this flag
-        .set_window_flags(SDL_WINDOW_RESIZABLE as u32) // casting? still works?
+        .set_window_flags(SDL_WINDOW_RESIZABLE as u32)
         .position_centered()
         .build()?;
 
     let canvasBounds: IntRect = IntRect {
         x1: 0,
         y1: 0,
-        x2: width as i32,
-        y2: height as i32,
+        x2: 1700,
+        y2: 1000,
     };
 
     let bgcolor = Color::RGB(80, 80, 80);
-    // vec len is 1.8 million
     let mut data: Vec<u8> =
         Vec::with_capacity(canvasBounds.width() as usize * canvasBounds.height() as usize * 4);
     for _ in 0..(canvasBounds.width() * canvasBounds.height()) {
@@ -806,7 +805,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         data.push(bgcolor.b);
         data.push(bgcolor.a);
     }
-    //(canvasBounds.width() * canvasBounds.height() * 4).debugPrint();
     let mut whiteboard = Whiteboard {
         data: WhiteboardData {
             canvasBounds: canvasBounds,
@@ -927,7 +925,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         0.0, 0.0, 0.0, 1.0
     ];
 
-    let pixelsTexture = device.create_texture(
+    let pixelsTexture: Texture<'static> = device.create_texture(
         TextureCreateInfo::new()
             .with_num_levels(1)
             .with_layer_count_or_depth(1)
@@ -1026,8 +1024,6 @@ fn main() -> Result<(), Box<dyn Error>> {
                                 }
                                 if let Some(idk) = change {
                                     // take ownership as late as possible
-                                    // this logic is wrong lolll
-                                    // you wanna insert at whiteboard.changesIndex
                                     if whiteboard.changesIndex == whiteboard.changes.len() {
                                         whiteboard.changes.push(*idk);
                                         whiteboard.changesIndex += 1;
@@ -1231,8 +1227,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         commandBuffer.push_vertex_uniform_data(0, &data);
         commandBuffer.push_fragment_uniform_data(0, &myInto::into(&whiteboard.bgcolor));
         renderPass.draw_indexed_primitives(vertexIndicies.len() as u32, 1, 0, 0, 0);
-        //renderPass.draw_primitives(3, 1, 0, 0);
-        //renderPass.draw_indexed_primitives(6, 1, 0, 0, 0);
 
         device.end_render_pass(renderPass);
         commandBuffer.submit()?;
